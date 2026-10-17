@@ -1,0 +1,23 @@
+# Keep the build context small and never copy secrets or local data into the image.
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+**/dist
+**/.venv
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+.git
+.github
+.vscode
+.idea
+backend/tests
+frontend/e2e
+**/*.log
+**/*.csv
+**/*.xlsx
+**/*.xls
+**/*.json.gz
+*.zip

@@ -1,0 +1,24 @@
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Environment files: ignore secrets, keep examples
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Node.js
+node_modules/
+dist/
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

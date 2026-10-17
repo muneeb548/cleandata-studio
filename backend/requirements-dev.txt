@@ -1,0 +1,4 @@
+# Everything needed to run the tests (not installed in production)
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27            # used by FastAPI's TestClient
