@@ -11,6 +11,7 @@ import { Checkbox, FieldHint, Input, Label, RadioCard } from "@/components/ui/fo
 import { useToast } from "@/components/ui/toast";
 import { formatNumber, suggestedOutputName } from "@/lib/utils";
 import { KeyValue } from "./shared";
+import { ChangeReportCard } from "./QuickClean";
 import { useWorkspace } from "./WorkspaceContext";
 
 export function ExportPanel() {
@@ -150,6 +151,8 @@ export function ExportPanel() {
         </CardContent>
       </Card>
       </div>
+
+      <ChangeReportCard />
     </div>
   );
 }

@@ -60,6 +60,10 @@ export type FormState = {
   mapColumn: string;
   mapEdits: Record<string, string>;
   mapIgnoreCase: boolean;
+  ndColumns: string[];
+  ndMatch: "normalized" | "similar";
+  ndAction: "flag" | "remove";
+  ndColumnName: string;
 };
 
 export const DEFAULT_FORM: FormState = {
@@ -116,6 +120,10 @@ export const DEFAULT_FORM: FormState = {
   mapColumn: "",
   mapEdits: {},
   mapIgnoreCase: true,
+  ndColumns: [],
+  ndMatch: "normalized",
+  ndAction: "flag",
+  ndColumnName: "duplicate_group",
 };
 
 /** Rows of the mapping table that actually change something. */
@@ -296,6 +304,18 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
       return f.numColumns.length
         ? { operation: { type: "clean_numbers", columns: f.numColumns, decimal: f.numDecimal, on_error: f.numOnError } }
         : { error: "Select at least one column." };
+    case "near_duplicates":
+      if (!f.ndColumns.length) return { error: "Select the columns that identify a record, e.g. name and email." };
+      if (f.ndAction === "flag" && !f.ndColumnName.trim()) return { error: "Enter a name for the group column." };
+      return {
+        operation: {
+          type: "near_duplicates",
+          columns: f.ndColumns,
+          match: f.ndMatch,
+          action: f.ndAction,
+          column_name: f.ndColumnName.trim() || "duplicate_group",
+        },
+      };
     case "map_values": {
       if (!f.mapColumn) return { error: "Choose a column." };
       const mappings = mappingRows(f.mapEdits);
@@ -353,6 +373,7 @@ export function formForIssue(choice: CleanChoice, column: string | null | undefi
 
 export const CHOICES: { id: CleanChoice; label: string; description: string }[] = [
   { id: "remove_duplicates", label: "Remove duplicate rows", description: "Delete exact copies of earlier rows." },
+  { id: "near_duplicates", label: "Find near-duplicates", description: "Same record written slightly differently." },
   { id: "missing_values", label: "Handle missing values", description: "Drop or fill empty cells in selected columns." },
   { id: "trim_whitespace", label: "Trim whitespace", description: "Remove leading and trailing spaces." },
   { id: "standardize_text", label: "Standardize text case", description: "lowercase, UPPERCASE or Title Case." },
@@ -386,7 +407,7 @@ export type CategoryId =
 
 /** Operations grouped the way users think about cleaning. */
 export const CATEGORIES: { id: CategoryId; label: string; description: string; choices: CleanChoice[] }[] = [
-  { id: "duplicates", label: "Duplicates", description: "Remove repeated rows", choices: ["remove_duplicates"] },
+  { id: "duplicates", label: "Duplicates", description: "Exact and near-duplicates", choices: ["remove_duplicates", "near_duplicates"] },
   { id: "missing", label: "Missing values", description: "Fill or remove empty cells", choices: ["missing_values"] },
   { id: "text", label: "Text cleaning", description: "Spaces and capitalisation", choices: ["trim_whitespace", "standardize_text"] },
   { id: "columns", label: "Column names", description: "Tidy and de-duplicate headers", choices: ["clean_column_names"] },

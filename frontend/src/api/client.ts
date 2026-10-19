@@ -1,6 +1,7 @@
 import type {
   AppConfig,
   ApplyResult,
+  ChangeReport,
   ColumnValues,
   CompareResult,
   CompareRowsPage,
@@ -11,6 +12,9 @@ import type {
   ImportFormat,
   Operation,
   OperationPreview,
+  QuickCleanPlan,
+  QuickCleanPreview,
+  QuickCleanResult,
   OutlierReport,
   Profile,
   RowsPage,
@@ -206,6 +210,15 @@ export const api = {
     ),
   outliers: (column: string) => request<OutlierReport>(`/api/outliers${qs({ column })}`),
   values: (column: string) => request<ColumnValues>(`/api/values${qs({ column })}`),
+  quickCleanPlan: () => request<QuickCleanPlan>("/api/quick-clean/plan"),
+  quickCleanPreview: (operations: Operation[]) =>
+    request<QuickCleanPreview>("/api/quick-clean/preview", { method: "POST", body: JSON.stringify({ operations }) }),
+  quickCleanApply: (operations: Operation[], previewToken: string) =>
+    request<QuickCleanResult>("/api/quick-clean/apply", {
+      method: "POST",
+      body: JSON.stringify({ operations, preview_token: previewToken }),
+    }),
+  report: () => request<ChangeReport>("/api/report"),
   preview: (operation: Operation) =>
     request<OperationPreview>("/api/operations/preview", { method: "POST", body: JSON.stringify({ operation }) }),
   /** Operations that can remove data need the preview_token returned by preview(). */

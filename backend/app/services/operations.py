@@ -8,7 +8,9 @@ previews is exactly what gets applied.
 
 from __future__ import annotations
 
+import difflib
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +37,7 @@ from app.schemas.operations import (  # noqa: E402,F401
     MapValues,
     MergeColumns,
     MissingValues,
+    NearDuplicates,
     Operation,
     RemoveDuplicates,
     RemoveEmpty,
@@ -47,7 +50,7 @@ from app.schemas.operations import (  # noqa: E402,F401
 
 DESTRUCTIVE_TYPES = {"remove_duplicates", "remove_empty"}
 # Operation types that can remove rows or columns with at least one of their settings.
-DATA_LOSS_TYPES = DESTRUCTIVE_TYPES | {"missing_values", "split_column", "merge_columns"}
+DATA_LOSS_TYPES = DESTRUCTIVE_TYPES | {"missing_values", "split_column", "merge_columns", "near_duplicates"}
 
 
 def is_destructive(op: BaseModel) -> bool:
@@ -58,6 +61,8 @@ def is_destructive(op: BaseModel) -> bool:
         return not op.keep_original
     if op.type == "merge_columns":
         return not op.keep_originals
+    if op.type == "near_duplicates":
+        return op.action == "remove"
     return op.type == "missing_values" and op.strategy in ("drop_rows", "drop_columns")
 
 
@@ -935,6 +940,97 @@ def map_values(df: pd.DataFrame, op: MapValues) -> OpResult:
     return OpResult(out, summary, cells_changed=changed, warnings=warnings, details={"touched": cols})
 
 
+# --------------------------------------------------------------------------- near duplicates
+
+SIMILAR_RATIO = 0.9
+MAX_BLOCK = 3000  # keys compared pairwise in one block; larger blocks are skipped (reported)
+
+
+def _record_key(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = unicodedata.normalize("NFKD", value)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
+    return re.sub(r"[^\w]+", " ", text).strip()
+
+
+def near_duplicate_groups(df: pd.DataFrame, columns: list[str], similar: bool) -> tuple[list[list], int]:
+    """Groups of row labels (2+ rows each) that describe the same record, and how many keys were too many to compare."""
+    parts = [_canon(df[c]).tolist() for c in columns]
+    keys = ["|".join(_record_key(p[i]) for p in parts) for i in range(len(df))]
+    rows_by_key: dict[str, list] = {}
+    for label, key in zip(df.index.tolist(), keys):
+        if key.replace("|", ""):  # rows with nothing in the chosen columns are never duplicates
+            rows_by_key.setdefault(key, []).append(label)
+    parent = {k: k for k in rows_by_key}
+
+    def find(k: str) -> str:
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    skipped = 0
+    if similar:
+        blocks: dict[str, list[str]] = {}
+        for key in rows_by_key:
+            blocks.setdefault(key.replace("|", "")[:1], []).append(key)
+        for block in blocks.values():
+            if len(block) > MAX_BLOCK:
+                skipped += len(block)
+                continue
+            block.sort(key=len)
+            for i, a in enumerate(block):
+                for b in block[i + 1:]:
+                    if len(b) > len(a) / SIMILAR_RATIO + 2:
+                        break  # sorted by length: later keys are too long to be 90% alike
+                    matcher = difflib.SequenceMatcher(None, a, b)
+                    if matcher.quick_ratio() >= SIMILAR_RATIO and matcher.ratio() >= SIMILAR_RATIO:
+                        parent[find(b)] = find(a)
+    groups: dict[str, list] = {}
+    for key, labels in rows_by_key.items():
+        groups.setdefault(find(key), []).extend(labels)
+    order = {label: i for i, label in enumerate(df.index.tolist())}
+    result = [sorted(g, key=order.__getitem__) for g in groups.values() if len(g) > 1]
+    result.sort(key=lambda g: order[g[0]])
+    return result, skipped
+
+
+def near_duplicates(df: pd.DataFrame, op: NearDuplicates) -> OpResult:
+    cols = _require_columns(df, op.columns)
+    if op.action == "flag" and op.column_name in cols:
+        raise AppError("column_exists", f'"{op.column_name}" is one of the columns being compared.',
+                       "Choose another name for the group column.")
+    groups, skipped = near_duplicate_groups(df, cols, op.match == "similar")
+    warnings = []
+    if skipped:
+        warnings.append(f"{_plural(skipped, 'value')} were not compared for small spelling differences because "
+                        "too many start with the same letter. Exact and cleaned-up matches were still found.")
+    rows_in_groups = sum(len(g) for g in groups)
+    if not groups:
+        return OpResult(df.copy(deep=False), "No near-duplicate rows found.", warnings=warnings)
+    if op.action == "remove":
+        drop = [label for g in groups for label in g[1:]]
+        out = df.drop(index=drop).copy(deep=False)
+        return OpResult(out, f"Removed {_plural(len(drop), 'near-duplicate row')} from {_plural(len(groups), 'group')} "
+                             "(kept the first row of each).", rows_removed=len(drop), warnings=warnings,
+                        details={"removed_index": drop, "groups": len(groups)})
+    label = pd.Series(pd.NA, index=df.index, dtype=STRING_DTYPE)
+    for n, g in enumerate(groups, start=1):
+        label.loc[g] = f"Group {n}"
+    out = df.copy(deep=False)
+    added: list[str] = []
+    if op.column_name in df.columns:
+        warnings.append(f'The existing "{op.column_name}" column will be replaced with the new group numbers.')
+    else:
+        added = [op.column_name]
+    out[op.column_name] = label
+    changed, _ = count_changed_cells(df, out, columns=[op.column_name])
+    return OpResult(out, f"Found {_plural(len(groups), 'group')} of near-duplicates ({_plural(rows_in_groups, 'row')}), "
+                         f'marked in "{op.column_name}". No rows were removed.', cells_changed=changed,
+                    warnings=warnings, details={"added_columns": added, "groups": len(groups), "touched": [op.column_name]})
+
+
 # --------------------------------------------------------------------------- review flags
 
 EMAIL_RE = r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}"
@@ -1032,6 +1128,7 @@ HANDLERS = {
     "clean_email": clean_email,
     "clean_numbers": clean_numbers,
     "map_values": map_values,
+    "near_duplicates": near_duplicates,
     "flag_rows": flag_rows,
 }
 
@@ -1051,6 +1148,7 @@ LABELS = {
     "clean_email": "Clean email addresses",
     "clean_numbers": "Clean numbers and currencies",
     "map_values": "Map values",
+    "near_duplicates": "Find near-duplicates",
     "flag_rows": "Flag rows for review",
 }
 

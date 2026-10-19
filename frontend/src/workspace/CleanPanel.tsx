@@ -88,6 +88,7 @@ const EXPLANATIONS: Record<CleanChoice, string> = {
   clean_email: "Tidies email addresses and lists the ones that cannot be real, so they can be fixed or flagged.",
   clean_numbers: "Turns amounts written as text, in any currency or number style, into real numbers.",
   map_values: "Shows every different value in a column so you can rename many of them at once.",
+  near_duplicates: "Finds rows that are the same record written slightly differently, and marks or removes them.",
   flag_rows: "Marks rows that need a human decision in a new column, without changing or removing any data.",
 };
 
@@ -103,6 +104,8 @@ const SHORT_LABELS: Partial<Record<CleanChoice, string>> = {
   clean_numbers: "Amounts & currencies",
   find_replace: "Find & replace",
   map_values: "Map many values",
+  remove_duplicates: "Exact copies",
+  near_duplicates: "Near-duplicates",
 };
 
 function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
@@ -503,6 +506,36 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
 
     case "map_values":
       return <MapValuesForm form={form} set={set} cols={cols} />;
+
+    case "near_duplicates":
+      return (
+        <div className="space-y-4">
+          <p className="text-body text-muted-foreground">
+            Finds rows that describe the same person or thing even when they are written differently, for example “Ali Khan, ali@gmail.com” and “ali  khan., ALI@gmail.com ”.
+          </p>
+          <ColumnPicker id="nd-cols" label="Columns that identify a record" columns={cols} selected={form.ndColumns} onChange={(ndColumns) => set({ ndColumns })} />
+          <fieldset>
+            <legend className="mb-2 text-small font-medium text-slate-700">How close must they be?</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <RadioCard name="nd-match" value="normalized" checked={form.ndMatch === "normalized"} onChange={() => set({ ndMatch: "normalized" })} label="Same after cleanup" description="Ignores capitals, accents, spaces and punctuation. Very safe." />
+              <RadioCard name="nd-match" value="similar" checked={form.ndMatch === "similar"} onChange={() => set({ ndMatch: "similar" })} label="Also small spelling differences" description="“Jon Smith” and “John Smith”. Always review the groups." />
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend className="mb-2 text-small font-medium text-slate-700">What should happen?</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <RadioCard name="nd-action" value="flag" checked={form.ndAction === "flag"} onChange={() => set({ ndAction: "flag" })} label="Mark them with a group number" description="Adds a column; nothing is removed. Recommended." />
+              <RadioCard name="nd-action" value="remove" checked={form.ndAction === "remove"} onChange={() => set({ ndAction: "remove" })} label="Keep only the first row of each group" description="Removes the other rows. Preview carefully." />
+            </div>
+          </fieldset>
+          {form.ndAction === "flag" && (
+            <div className="space-y-1.5 sm:max-w-xs">
+              <Label htmlFor="nd-name">Group column name</Label>
+              <Input id="nd-name" value={form.ndColumnName} maxLength={200} onChange={(e) => set({ ndColumnName: e.target.value })} />
+            </div>
+          )}
+        </div>
+      );
 
     case "flag_rows":
       return <FlagRulesForm form={form} set={set} cols={cols} />;
@@ -919,6 +952,7 @@ export function CleanPanel() {
       emailColumns: keep(f.emailColumns),
       numColumns: keep(f.numColumns),
       mapColumn: names.has(f.mapColumn) ? f.mapColumn : "",
+      ndColumns: keep(f.ndColumns),
       phoneRegionColumn: names.has(f.phoneRegionColumn) ? f.phoneRegionColumn : "",
       flagRegionColumn: names.has(f.flagRegionColumn) ? f.flagRegionColumn : "",
       splitColumn: names.has(f.splitColumn) ? f.splitColumn : "",

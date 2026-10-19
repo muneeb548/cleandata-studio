@@ -24,6 +24,7 @@ def run(df, **params):
         "clean_email": ops.CleanEmail,
         "clean_numbers": ops.CleanNumbers,
         "map_values": ops.MapValues,
+        "near_duplicates": ops.NearDuplicates,
         "flag_rows": ops.FlagRows,
     }[params["type"]]
     return ops.run_operation(df, model(**params))

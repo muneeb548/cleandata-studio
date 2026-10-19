@@ -245,6 +245,75 @@ class HistoryResponse(_Model):
     can_undo: bool
 
 
+class QuickStep(_Model):
+    id: str
+    title: str
+    label: str
+    summary: str
+    operation: dict[str, Any]
+    selected: bool
+    note: str | None
+    warnings: list[str]
+
+
+class QuickCleanPlan(_Model):
+    steps: list[QuickStep]
+    needs_decision: list[str] = Field(description="Things Quick Clean will not change because a person must decide.")
+
+
+class QuickPreviewStep(_Model):
+    label: str
+    summary: str
+    changed: bool
+    blocked: str | None
+    warnings: list[str]
+
+
+class QuickCleanPreview(_Model):
+    steps: list[QuickPreviewStep]
+    rows_before: int
+    rows_after: int
+    columns_before: int
+    columns_after: int
+    cells_changed: int
+    blocked: str | None
+    preview_token: str
+
+
+class QuickAppliedStep(_Model):
+    label: str
+    summary: str
+    applied: bool
+
+
+class QuickCleanResult(_Model):
+    steps: list[QuickAppliedStep]
+    applied: int
+    session: SessionInfo
+
+
+class ReportStep(_Model):
+    label: str
+    summary: str
+
+
+class ReviewColumn(_Model):
+    column: str
+    rows: int
+
+
+class ChangeReport(_Model):
+    file: str
+    rows_before: int
+    rows_after: int
+    columns_before: int
+    columns_after: int
+    steps: list[ReportStep]
+    review: list[ReviewColumn]
+    open_items: list[str]
+    message: str = Field(description="A ready-to-send summary for the client.")
+
+
 class ValueCount(_Model):
     value: str
     count: int

@@ -151,7 +151,53 @@ export type OperationType =
   | "clean_email"
   | "clean_numbers"
   | "map_values"
+  | "near_duplicates"
   | "flag_rows";
+
+export interface QuickStep {
+  id: string;
+  title: string;
+  label: string;
+  summary: string;
+  operation: Operation;
+  selected: boolean;
+  note: string | null;
+  warnings: string[];
+}
+
+export interface QuickCleanPlan {
+  steps: QuickStep[];
+  needs_decision: string[];
+}
+
+export interface QuickCleanPreview {
+  steps: { label: string; summary: string; changed: boolean; blocked: string | null; warnings: string[] }[];
+  rows_before: number;
+  rows_after: number;
+  columns_before: number;
+  columns_after: number;
+  cells_changed: number;
+  blocked: string | null;
+  preview_token: string;
+}
+
+export interface QuickCleanResult {
+  steps: { label: string; summary: string; applied: boolean }[];
+  applied: number;
+  session: SessionInfo;
+}
+
+export interface ChangeReport {
+  file: string;
+  rows_before: number;
+  rows_after: number;
+  columns_before: number;
+  columns_after: number;
+  steps: { label: string; summary: string }[];
+  review: { column: string; rows: number }[];
+  open_items: string[];
+  message: string;
+}
 
 export interface ColumnValues {
   column: string;
@@ -212,6 +258,7 @@ export type Operation =
   | { type: "clean_email"; columns: string[]; lowercase: boolean; fix_domains: boolean; on_invalid: "keep" | "set_missing" }
   | { type: "clean_numbers"; columns: string[]; decimal: "auto" | "." | ","; on_error: "abort" | "set_missing" }
   | { type: "map_values"; columns: string[]; mappings: { value: string; to: string }[]; ignore_case: boolean }
+  | { type: "near_duplicates"; columns: string[]; match: "normalized" | "similar"; action: "flag" | "remove"; column_name: string }
   | { type: "flag_rows"; rules: FlagRule[]; column_name: string };
 
 export interface CellChange {

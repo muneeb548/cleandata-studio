@@ -245,6 +245,29 @@ class MapValues(_Op):
     ignore_case: bool = Field(True, description="Also match the values written in other capitals and with outer spaces.")
 
 
+class NearDuplicates(_Op):
+    """Find rows that are the same person or thing written slightly differently ("Ali Khan" / "ali  khan.")."""
+
+    type: Literal["near_duplicates"]
+    columns: Annotated[list[ColumnName], Field(min_length=1, max_length=20)] = Field(
+        description="Columns that identify a record, e.g. name and email."
+    )
+    match: Literal["normalized", "similar"] = Field(
+        "normalized",
+        description="normalized: equal after ignoring capitals, accents, spaces and punctuation; "
+                    "similar: also small spelling differences (about 90% alike).",
+    )
+    action: Literal["flag", "remove"] = Field(
+        "flag", description="flag: add a column with a group number; remove: keep the first row of each group."
+    )
+    column_name: NewColumnName = "duplicate_group"
+
+    @field_validator("column_name")
+    @classmethod
+    def _check_name(cls, value: str) -> str:
+        return _clean_new_name(value)
+
+
 class FlagRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -293,6 +316,7 @@ Operation = Annotated[
         CleanEmail,
         CleanNumbers,
         MapValues,
+        NearDuplicates,
         FlagRows,
     ],
     Field(discriminator="type"),
@@ -301,7 +325,7 @@ Operation = Annotated[
 OPERATION_MODELS: dict[str, type[_Op]] = {
     m.model_fields["type"].annotation.__args__[0]: m  # type: ignore[union-attr]
     for m in (RemoveDuplicates, MissingValues, TrimWhitespace, StandardizeText, CleanColumnNames, ConvertType, RemoveEmpty,
-              FindReplace, SplitColumn, MergeColumns, StandardizePhone, StandardizeCountry, CleanEmail, CleanNumbers, MapValues, FlagRows)
+              FindReplace, SplitColumn, MergeColumns, StandardizePhone, StandardizeCountry, CleanEmail, CleanNumbers, MapValues, NearDuplicates, FlagRows)
 }
 
 
@@ -315,3 +339,12 @@ class OperationRequest(BaseModel):
         None,
         description="Token returned by the preview of the same operation. Required to apply operations that can remove data.",
     )
+
+
+class QuickCleanRequest(BaseModel):
+    """Body of POST /api/quick-clean/preview and /api/quick-clean/apply."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operations: Annotated[list[Operation], Field(min_length=1, max_length=30)]
+    preview_token: Annotated[str, StringConstraints(max_length=128)] | None = None

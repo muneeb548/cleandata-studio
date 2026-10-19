@@ -178,3 +178,16 @@ describe("emails, amounts and value mapping", () => {
     });
   });
 });
+
+describe("near-duplicates", () => {
+  it("flags by default and needs the identifying columns", () => {
+    expect(buildOperation("near_duplicates", DEFAULT_FORM).error).toMatch(/columns/);
+    expect(buildOperation("near_duplicates", { ...DEFAULT_FORM, ndColumns: ["name", "email"] }).operation).toEqual({
+      type: "near_duplicates",
+      columns: ["name", "email"],
+      match: "normalized",
+      action: "flag",
+      column_name: "duplicate_group",
+    });
+  });
+});

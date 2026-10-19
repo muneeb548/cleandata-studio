@@ -5,6 +5,7 @@ Keeping the HTTP layer thin means this logic is easy to unit test.
 
 from __future__ import annotations
 
+import hmac
 import math
 import os
 import re
@@ -316,35 +317,102 @@ def apply_operation(session: Session, op: BaseModel, preview_token: str | None =
                            "This operation can remove data, so it must be previewed before it is applied.",
                            "Call the preview endpoint first and send its preview_token with the apply request.",
                            status=428)
-        before = session.current
-        result = run_operation(before, op)
-        if result.blocked:
-            raise AppError("operation_blocked", result.blocked,
-                           "Nothing was changed. Adjust the options and preview again.", status=422)
-        description = _describe(before, op, result)
-        if not result.changed:
+        description, entry = _apply_step(session, op)
+        if entry is None:
             # Honest reporting: an operation that changed nothing is not recorded as applied.
             return {**description, "applied": False, "session": session_info(session)}
-        entry = HistoryEntry(
-            id=new_entry_id(),
-            type=op.type,
-            label=LABELS[op.type],
-            params=params,
-            summary=result.summary,
-            applied_at=time.time(),
-            rows_before=len(before),
-            rows_after=len(result.df),
-            columns_before=before.shape[1],
-            columns_after=result.df.shape[1],
-            rows_removed=result.rows_removed,
-            columns_removed=result.columns_removed,
-            cells_changed=result.cells_changed,
-            warnings=result.warnings,
-            df=result.df,
-            bytes=new_bytes(result.df, before),
-        )
-        session.push(entry, settings.max_history_snapshots, settings.max_history_bytes)
         return {**description, "applied": True, "step_id": entry.id, "session": session_info(session)}
+
+
+def _apply_step(session: Session, op: BaseModel) -> tuple[dict, HistoryEntry | None]:
+    """Run one operation on the working data and record it. Caller holds the session lock
+    and has already checked the preview token. Returns (description, entry or None if unchanged)."""
+    params = op.model_dump()
+    before = session.current
+    result = run_operation(before, op)
+    if result.blocked:
+        raise AppError("operation_blocked", result.blocked,
+                       "Nothing was changed. Adjust the options and preview again.", status=422)
+    description = _describe(before, op, result)
+    if not result.changed:
+        return description, None
+    entry = HistoryEntry(
+        id=new_entry_id(),
+        type=op.type,
+        label=LABELS[op.type],
+        params=params,
+        summary=result.summary,
+        applied_at=time.time(),
+        rows_before=len(before),
+        rows_after=len(result.df),
+        columns_before=before.shape[1],
+        columns_after=result.df.shape[1],
+        rows_removed=result.rows_removed,
+        columns_removed=result.columns_removed,
+        cells_changed=result.cells_changed,
+        warnings=result.warnings,
+        df=result.df,
+        bytes=new_bytes(result.df, before),
+    )
+    session.push(entry, settings.max_history_snapshots, settings.max_history_bytes)
+    return description, entry
+
+
+# --------------------------------------------------------------------------- quick clean and report
+
+def quick_clean_plan(session: Session) -> dict:
+    from app.services.quick_clean import plan
+
+    with session.lock:
+        return session.cached((session.version_key, "quick_clean_plan"), lambda: plan(session.current))
+
+
+def _quick_token(session: Session, ops: list[BaseModel]) -> str:
+    return session.preview_token({"quick_clean": [op.model_dump() for op in ops]})
+
+
+def preview_quick_clean(session: Session, ops: list[BaseModel]) -> dict:
+    """Run the chosen steps one after another on a copy and report each one; nothing is stored."""
+    with session.lock:
+        work = before = session.current
+        steps = []
+        cells = 0
+        for op in ops:
+            result = run_operation(work, op)
+            steps.append({"label": LABELS[op.type], "summary": result.summary, "changed": result.changed and not result.blocked,
+                          "blocked": result.blocked, "warnings": result.warnings})
+            if result.blocked:
+                break
+            cells += result.cells_changed
+            work = result.df
+        return {
+            "steps": steps,
+            "rows_before": len(before), "rows_after": len(work),
+            "columns_before": before.shape[1], "columns_after": work.shape[1],
+            "cells_changed": cells,
+            "blocked": next((s["blocked"] for s in steps if s["blocked"]), None),
+            "preview_token": _quick_token(session, ops),
+        }
+
+
+def apply_quick_clean(session: Session, ops: list[BaseModel], preview_token: str | None) -> dict:
+    """Apply previewed steps; each becomes its own history entry so it can be undone separately."""
+    with session.lock:
+        if not preview_token or not hmac.compare_digest(_quick_token(session, ops), preview_token):
+            raise AppError("preview_outdated", "The data or the chosen fixes changed since the preview.",
+                           "Preview Quick Clean again, then apply.", status=409)
+        steps = []
+        for op in ops:
+            description, entry = _apply_step(session, op)
+            steps.append({"label": LABELS[op.type], "summary": description["summary"], "applied": entry is not None})
+        return {"steps": steps, "applied": sum(s["applied"] for s in steps), "session": session_info(session)}
+
+
+def change_report(session: Session) -> dict:
+    from app.services.quick_clean import change_report as build
+
+    with session.lock:
+        return build(session.filename, session.original, session.current, [h.public() for h in session.history])
 
 
 def undo(session: Session) -> dict:
