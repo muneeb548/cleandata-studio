@@ -147,10 +147,11 @@ export type OperationType =
   | "split_column"
   | "merge_columns"
   | "standardize_phone"
+  | "standardize_country"
   | "flag_rows";
 
 export type FlagCheck = "missing" | "invalid_email" | "invalid_phone" | "not_number" | "not_date" | "duplicate_value";
-export type FlagRule = { column: string; check: FlagCheck; region?: string | null };
+export type FlagRule = { column: string; check: FlagCheck; region?: string | null; region_column?: string | null };
 
 export type Operation =
   | { type: "remove_duplicates"; keep: "first" | "last" }
@@ -193,9 +194,11 @@ export type Operation =
       type: "standardize_phone";
       columns: string[];
       region: string;
+      region_column: string | null;
       format: "national" | "international" | "e164";
       on_invalid: "keep" | "set_missing";
     }
+  | { type: "standardize_country"; columns: string[]; output: "name" | "code" }
   | { type: "flag_rows"; rules: FlagRule[]; column_name: string };
 
 export interface CellChange {

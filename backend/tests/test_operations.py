@@ -20,6 +20,7 @@ def run(df, **params):
         "split_column": ops.SplitColumn,
         "merge_columns": ops.MergeColumns,
         "standardize_phone": ops.StandardizePhone,
+        "standardize_country": ops.StandardizeCountry,
         "flag_rows": ops.FlagRows,
     }[params["type"]]
     return ops.run_operation(df, model(**params))

@@ -177,6 +177,11 @@ class StandardizePhone(_Op):
     region: RegionCode = Field(
         "US", description="Two-letter country code (US, GB, DE, PK...) used for numbers written without a + country code."
     )
+    region_column: ColumnName | None = Field(
+        None,
+        description="Column that says which country each row is from (e.g. 'country'). Rows whose country is "
+                    "empty or not recognised use `region`.",
+    )
     format: Literal["national", "international", "e164"] = Field(
         "international",
         description="national: (415) 555-2671, international: +1 415-555-2671, e164: +14155552671.",
@@ -191,6 +196,14 @@ class StandardizePhone(_Op):
         return _upper_region(value)
 
 
+class StandardizeCountry(_Op):
+    """Write country names in one form ("USA", "U.S.A.", "america" -> "United States") or as ISO codes."""
+
+    type: Literal["standardize_country"]
+    columns: ColumnList = Field(default_factory=list)
+    output: Literal["name", "code"] = Field("name", description='name: "United States"; code: "US" (ISO 3166-1).')
+
+
 class FlagRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -198,6 +211,9 @@ class FlagRule(BaseModel):
     check: Literal["missing", "invalid_email", "invalid_phone", "not_number", "not_date", "duplicate_value"]
     region: RegionCode | None = Field(
         None, description="invalid_phone only: country for numbers written without a + country code."
+    )
+    region_column: ColumnName | None = Field(
+        None, description="invalid_phone only: column that says which country each row is from."
     )
 
     @field_validator("region")
@@ -232,6 +248,7 @@ Operation = Annotated[
         SplitColumn,
         MergeColumns,
         StandardizePhone,
+        StandardizeCountry,
         FlagRows,
     ],
     Field(discriminator="type"),
@@ -240,7 +257,7 @@ Operation = Annotated[
 OPERATION_MODELS: dict[str, type[_Op]] = {
     m.model_fields["type"].annotation.__args__[0]: m  # type: ignore[union-attr]
     for m in (RemoveDuplicates, MissingValues, TrimWhitespace, StandardizeText, CleanColumnNames, ConvertType, RemoveEmpty,
-              FindReplace, SplitColumn, MergeColumns, StandardizePhone, FlagRows)
+              FindReplace, SplitColumn, MergeColumns, StandardizePhone, StandardizeCountry, FlagRows)
 }
 
 

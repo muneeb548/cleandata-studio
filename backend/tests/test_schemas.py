@@ -59,7 +59,7 @@ def test_catalog_matches_schema_and_lists_every_operation():
     assert {c["type"] for c in catalog} == {
         "remove_duplicates", "missing_values", "trim_whitespace", "standardize_text",
         "clean_column_names", "convert_type", "remove_empty", "find_replace",
-        "split_column", "merge_columns", "standardize_phone", "flag_rows",
+        "split_column", "merge_columns", "standardize_phone", "standardize_country", "flag_rows",
     }
     mv = next(c for c in catalog if c["type"] == "missing_values")
     assert mv["may_remove_data"] and "strategy" in mv["required"]

@@ -40,11 +40,16 @@ export type FormState = {
   mergeKeep: boolean;
   phoneColumns: string[];
   phoneRegion: string;
+  phoneRegionSource: "fixed" | "column";
+  phoneRegionColumn: string;
   phoneFormat: "national" | "international" | "e164";
   phoneOnInvalid: "keep" | "set_missing";
   flagRules: FlagRule[];
   flagColumnName: string;
   flagRegion: string;
+  flagRegionColumn: string;
+  countryColumns: string[];
+  countryOutput: "name" | "code";
 };
 
 export const DEFAULT_FORM: FormState = {
@@ -81,11 +86,16 @@ export const DEFAULT_FORM: FormState = {
   mergeKeep: true,
   phoneColumns: [],
   phoneRegion: "US",
+  phoneRegionSource: "fixed",
+  phoneRegionColumn: "",
   phoneFormat: "international",
   phoneOnInvalid: "keep",
   flagRules: [],
   flagColumnName: "needs_review",
   flagRegion: "",
+  flagRegionColumn: "",
+  countryColumns: [],
+  countryOutput: "name",
 };
 
 /** Countries offered for phone numbers written without a + country code (any other code can be typed). */
@@ -117,6 +127,7 @@ export function columnRestriction(choice: CleanChoice, form: FormState, col: Col
     case "standardize_text":
     case "find_replace":
     case "split_column":
+    case "standardize_country":
       return col.is_text ? null : "Not text";
     default:
       return null;
@@ -212,11 +223,15 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
     case "standardize_phone":
       if (!f.phoneColumns.length) return { error: "Select at least one column." };
       if (!/^[A-Za-z]{2}$/.test(f.phoneRegion)) return { error: "Choose the country of numbers written without a + code." };
+      if (f.phoneRegionSource === "column" && !f.phoneRegionColumn) return { error: "Choose the column that holds each row's country." };
+      if (f.phoneRegionSource === "column" && f.phoneColumns.includes(f.phoneRegionColumn))
+        return { error: "The country column cannot also be a phone column." };
       return {
         operation: {
           type: "standardize_phone",
           columns: f.phoneColumns,
           region: f.phoneRegion.toUpperCase(),
+          region_column: f.phoneRegionSource === "column" ? f.phoneRegionColumn : null,
           format: f.phoneFormat,
           on_invalid: f.phoneOnInvalid,
         },
@@ -225,14 +240,21 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
       if (!f.flagRules.length) return { error: "Add at least one check." };
       if (!f.flagColumnName.trim()) return { error: "Enter a name for the review column." };
       const region = /^[A-Za-z]{2}$/.test(f.flagRegion) ? f.flagRegion.toUpperCase() : null;
+      const region_column = f.flagRegionColumn || null;
       return {
         operation: {
           type: "flag_rows",
-          rules: f.flagRules.map((r) => (r.check === "invalid_phone" ? { ...r, region } : { column: r.column, check: r.check })),
+          rules: f.flagRules.map((r) =>
+            r.check === "invalid_phone" ? { column: r.column, check: r.check, region, region_column } : { column: r.column, check: r.check },
+          ),
           column_name: f.flagColumnName.trim(),
         },
       };
     }
+    case "standardize_country":
+      return f.countryColumns.length
+        ? { operation: { type: "standardize_country", columns: f.countryColumns, output: f.countryOutput } }
+        : { error: "Select at least one column." };
     case "outliers":
       return { error: "Outlier review does not change data." };
   }
@@ -291,6 +313,7 @@ export const CHOICES: { id: CleanChoice; label: string; description: string }[] 
   { id: "split_column", label: "Split column", description: "One column into several, e.g. first and last name." },
   { id: "merge_columns", label: "Merge columns", description: "Several columns into one new column." },
   { id: "standardize_phone", label: "Standardize phone numbers", description: "One format for numbers from any country." },
+  { id: "standardize_country", label: "Standardize country names", description: "USA, U.S.A., america → United States." },
   { id: "flag_rows", label: "Flag rows for review", description: "Add a column explaining which rows need attention." },
 ];
 
@@ -318,7 +341,7 @@ export const CATEGORIES: { id: CategoryId; label: string; description: string; c
   { id: "empty", label: "Empty rows & columns", description: "Drop fully empty rows or columns", choices: ["remove_empty"] },
   { id: "replace", label: "Find & replace", description: "Change specific values", choices: ["find_replace"] },
   { id: "split", label: "Split & merge", description: "Split or join columns", choices: ["split_column", "merge_columns"] },
-  { id: "phone", label: "Phone numbers", description: "One format, any country", choices: ["standardize_phone"] },
+  { id: "phone", label: "Phones & countries", description: "One format, any country", choices: ["standardize_phone", "standardize_country"] },
   { id: "flags", label: "Flag for review", description: "Mark rows that need checking", choices: ["flag_rows"] },
 ];
 

@@ -106,7 +106,7 @@ describe("new cleaning operations", () => {
 
   it("sends an upper-case country code for phones", () => {
     const op = buildOperation("standardize_phone", { ...DEFAULT_FORM, phoneColumns: ["p"], phoneRegion: "gb" }).operation;
-    expect(op).toEqual({ type: "standardize_phone", columns: ["p"], region: "GB", format: "international", on_invalid: "keep" });
+    expect(op).toEqual({ type: "standardize_phone", columns: ["p"], region: "GB", region_column: null, format: "international", on_invalid: "keep" });
   });
 
   it("adds the region only to phone checks", () => {
@@ -121,11 +121,27 @@ describe("new cleaning operations", () => {
     expect(buildOperation("flag_rows", f).operation).toEqual({
       type: "flag_rows",
       rules: [
-        { column: "p", check: "invalid_phone", region: "US" },
+        { column: "p", check: "invalid_phone", region: "US", region_column: null },
         { column: "e", check: "invalid_email" },
       ],
       column_name: "needs_review",
     });
     expect(buildOperation("flag_rows", DEFAULT_FORM).error).toMatch(/check/);
+  });
+
+  it("reads each row's country from a column when asked", () => {
+    const f = { ...DEFAULT_FORM, phoneColumns: ["phone"], phoneRegionSource: "column" as const };
+    expect(buildOperation("standardize_phone", f).error).toMatch(/country/);
+    expect(buildOperation("standardize_phone", { ...f, phoneRegionColumn: "phone" }).error).toMatch(/cannot also/);
+    expect(buildOperation("standardize_phone", { ...f, phoneRegionColumn: "country" }).operation).toMatchObject({ region_column: "country" });
+  });
+
+  it("builds country standardization", () => {
+    expect(buildOperation("standardize_country", DEFAULT_FORM).error).toMatch(/column/);
+    expect(buildOperation("standardize_country", { ...DEFAULT_FORM, countryColumns: ["c"], countryOutput: "code" }).operation).toEqual({
+      type: "standardize_country",
+      columns: ["c"],
+      output: "code",
+    });
   });
 });

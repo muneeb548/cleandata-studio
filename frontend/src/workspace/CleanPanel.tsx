@@ -83,6 +83,7 @@ const EXPLANATIONS: Record<CleanChoice, string> = {
   split_column: "Splits one column into several new columns, for example a full name into first and last name.",
   merge_columns: "Joins several columns into one new column, for example first and last name into a full name.",
   standardize_phone: "Writes phone numbers from any country in one format and lists the ones that are not real numbers.",
+  standardize_country: "Writes every country the same way, so “USA”, “U.S.A.” and “america” all become “United States”.",
   flag_rows: "Marks rows that need a human decision in a new column, without changing or removing any data.",
 };
 
@@ -91,6 +92,8 @@ const SHORT_LABELS: Partial<Record<CleanChoice, string>> = {
   standardize_text: "Change case",
   split_column: "Split",
   merge_columns: "Merge",
+  standardize_phone: "Phone numbers",
+  standardize_country: "Country names",
 };
 
 function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
@@ -379,9 +382,37 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
     case "standardize_phone":
       return (
         <div className="space-y-4">
+          <fieldset>
+            <legend className="mb-2 text-small font-medium text-slate-700">Which country is each number from?</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <RadioCard name="phone-source" value="fixed" checked={form.phoneRegionSource === "fixed"} onChange={() => set({ phoneRegionSource: "fixed" })} label="The same country for every row" description="Best when all customers are from one country." />
+              <RadioCard
+                name="phone-source"
+                value="column"
+                checked={form.phoneRegionSource === "column"}
+                onChange={() => set({ phoneRegionSource: "column", phoneRegionColumn: form.phoneRegionColumn || (cols.find((c) => /countr/i.test(c.name))?.name ?? "") })}
+                label="Read it from a column"
+                description="Best for mixed countries, e.g. a “country” column."
+              />
+            </div>
+          </fieldset>
+          {form.phoneRegionSource === "column" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="phone-region-col">Country column</Label>
+              <Select id="phone-region-col" value={form.phoneRegionColumn} onChange={(e) => set({ phoneRegionColumn: e.target.value })}>
+                <option value="">Choose a column…</option>
+                {cols.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
+              <FieldHint>Understands names and codes such as USA, U.K., Deutschland, PK or Pakistan.</FieldHint>
+            </div>
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="phone-region">Country of numbers without a + code</Label>
+              <Label htmlFor="phone-region">{form.phoneRegionSource === "column" ? "If a row's country is empty or unknown, use" : "Country of numbers without a + code"}</Label>
               <Select id="phone-region" value={form.phoneRegion} onChange={(e) => set({ phoneRegion: e.target.value })}>
                 {PHONE_REGIONS.map((code) => (
                   <option key={code} value={code}>
@@ -405,6 +436,21 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
             <RadioCard name="phone-invalid" value="set_missing" checked={form.phoneOnInvalid === "set_missing"} onChange={() => set({ phoneOnInvalid: "set_missing" })} label="Make invalid numbers empty" description="Use only when the client asked for it." />
           </div>
           <ColumnPicker id="phone-cols" columns={cols} selected={form.phoneColumns} onChange={(phoneColumns) => set({ phoneColumns })} />
+        </div>
+      );
+
+    case "standardize_country":
+      return (
+        <div className="space-y-4">
+          <fieldset>
+            <legend className="mb-2 text-small font-medium text-slate-700">Write countries as</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <RadioCard name="country-output" value="name" checked={form.countryOutput === "name"} onChange={() => set({ countryOutput: "name" })} label="Full names" description="USA, U.S.A., america → United States" />
+              <RadioCard name="country-output" value="code" checked={form.countryOutput === "code"} onChange={() => set({ countryOutput: "code" })} label="Two-letter codes" description="United States → US, Germany → DE (ISO)" />
+            </div>
+          </fieldset>
+          <p className="text-caption text-muted-foreground">Knows every country, plus common spellings, local names and three-letter codes. Values it does not recognise are left as they are and listed.</p>
+          <ColumnPicker id="country-cols" columns={cols} selected={form.countryColumns} onChange={(countryColumns) => set({ countryColumns })} disabledReason={restrict} />
         </div>
       );
 
@@ -494,7 +540,20 @@ function FlagRulesForm({ form, set, cols }: { form: FormState; set: (patch: Part
         </div>
         {usesPhone && (
           <div className="space-y-1.5">
-            <Label htmlFor="flag-region">Country of phone numbers without a + code</Label>
+            <Label htmlFor="flag-region-col">Country column for phone checks (optional)</Label>
+            <Select id="flag-region-col" value={form.flagRegionColumn} onChange={(e) => set({ flagRegionColumn: e.target.value })}>
+              <option value="">None</option>
+              {cols.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
+        {usesPhone && (
+          <div className="space-y-1.5">
+            <Label htmlFor="flag-region">{form.flagRegionColumn ? "If a row's country is empty or unknown, use" : "Country of phone numbers without a + code"}</Label>
             <Select id="flag-region" value={form.flagRegion} onChange={(e) => set({ flagRegion: e.target.value })}>
               <option value="">None: only accept numbers with a + country code</option>
               {PHONE_REGIONS.map((code) => (
@@ -718,6 +777,9 @@ export function CleanPanel() {
       frColumns: keep(f.frColumns),
       mergeColumns: keep(f.mergeColumns),
       phoneColumns: keep(f.phoneColumns),
+      countryColumns: keep(f.countryColumns),
+      phoneRegionColumn: names.has(f.phoneRegionColumn) ? f.phoneRegionColumn : "",
+      flagRegionColumn: names.has(f.flagRegionColumn) ? f.flagRegionColumn : "",
       splitColumn: names.has(f.splitColumn) ? f.splitColumn : "",
       flagRules: f.flagRules.filter((r) => names.has(r.column)),
     }));

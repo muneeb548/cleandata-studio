@@ -74,7 +74,11 @@ export function PreviewResult({ preview, mode }: { preview: OperationPreview; mo
       {invalid.length > 0 && (
         <section aria-labelledby="invalid-title">
           <h3 id="invalid-title" className="mb-2 text-body font-semibold">
-            {preview.operation.type === "standardize_phone" ? "Values that are not valid phone numbers" : "Values that cannot be converted"}
+            {preview.operation.type === "standardize_phone"
+              ? "Values that are not valid phone numbers"
+              : preview.operation.type === "standardize_country"
+                ? "Values that are not recognised countries"
+                : "Values that cannot be converted"}
             {details.invalid_counts && (
               <span className="ml-2 font-normal text-muted-foreground">
                 ({Object.entries(details.invalid_counts).map(([c, n]) => `${c}: ${n}`).join(", ")})

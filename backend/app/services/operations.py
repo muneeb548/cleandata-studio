@@ -36,6 +36,7 @@ from app.schemas.operations import (  # noqa: E402,F401
     RemoveDuplicates,
     RemoveEmpty,
     SplitColumn,
+    StandardizeCountry,
     StandardizePhone,
     StandardizeText,
     TrimWhitespace,
@@ -584,10 +585,45 @@ def parse_phone(value: str, region: str | None):
     return number if pn.is_valid_number(number) else None
 
 
+def _row_regions(df: pd.DataFrame, region_column: str | None, fallback: str | None) -> tuple[list[str | None], dict[str, int]]:
+    """The phone region of every row: from the country column when it names a country
+    that has phone numbers, otherwise the fallback. Also returns the unrecognised names."""
+    from app.services.countries import country_code
+
+    if not region_column:
+        return [fallback] * len(df), {}
+    _require_columns(df, [region_column])
+    pn = _phonenumbers()
+    regions: list[str | None] = []
+    unknown: dict[str, int] = {}
+    codes: dict[str, str | None] = {}
+    for value in _canon(df[region_column]).tolist():
+        if not isinstance(value, str) or not value.strip():
+            regions.append(fallback)
+            continue
+        if value not in codes:
+            code = country_code(value)
+            codes[value] = code if code in pn.SUPPORTED_REGIONS else None
+        if codes[value] is None:
+            unknown[value.strip()] = unknown.get(value.strip(), 0) + 1
+        regions.append(codes[value] or fallback)
+    return regions, unknown
+
+
+def _unknown_warning(unknown: dict[str, int], column: str, fallback: str | None) -> str:
+    shown = ", ".join(f'"{v}"' for v in list(unknown)[:5]) + (", ..." if len(unknown) > 5 else "")
+    use = f"so {fallback} was used for those rows" if fallback else "so only numbers with a + country code were accepted there"
+    return f'{_plural(sum(unknown.values()), "row")} in "{column}" did not name a known country ({shown}), {use}.'
+
+
 def standardize_phone(df: pd.DataFrame, op: StandardizePhone) -> OpResult:
     cols = _require_columns(df, op.columns)
     pn = _phonenumbers()
     region = _check_region(op.region)
+    if op.region_column and op.region_column in cols:
+        raise AppError("bad_country_column", f'"{op.region_column}" cannot be both a phone column and the country column.',
+                       "Choose the column that holds the country names.")
+    regions, unknown = _row_regions(df, op.region_column, region)
     fmt = {"national": pn.PhoneNumberFormat.NATIONAL, "international": pn.PhoneNumberFormat.INTERNATIONAL,
            "e164": pn.PhoneNumberFormat.E164}[op.format]
     out = df.copy(deep=False)
@@ -595,12 +631,18 @@ def standardize_phone(df: pd.DataFrame, op: StandardizePhone) -> OpResult:
     invalid_samples: list[dict] = []
     for c in cols:
         text = _phone_text(df[c])
-        cache: dict[str, str | None] = {}
-        for value in text.dropna().unique():
-            number = parse_phone(value, region)
-            cache[value] = pn.format_number(number, fmt) if number is not None else None
-        formatted = pd.Series([cache.get(v) if isinstance(v, str) else None for v in text.tolist()],
-                              index=text.index, dtype=STRING_DTYPE)
+        cache: dict[tuple[str, str | None], str | None] = {}
+        formatted_values: list[str | None] = []
+        for value, row_region in zip(text.tolist(), regions):
+            if not isinstance(value, str):
+                formatted_values.append(None)
+                continue
+            key = (value, row_region)
+            if key not in cache:
+                number = parse_phone(value, row_region)
+                cache[key] = pn.format_number(number, fmt) if number is not None else None
+            formatted_values.append(cache[key])
+        formatted = pd.Series(formatted_values, index=text.index, dtype=STRING_DTYPE)
         bad = (text.notna() & formatted.isna()).fillna(False).astype(bool)
         if bad.any():
             invalid_counts[c] = int(bad.sum())
@@ -614,10 +656,49 @@ def standardize_phone(df: pd.DataFrame, op: StandardizePhone) -> OpResult:
     summary = (f"Formatted {_plural(changed, 'phone number')} in {label} format." if changed
                else "All valid phone numbers are already in this format.")
     warnings = []
+    if unknown:
+        warnings.append(_unknown_warning(unknown, op.region_column, region))
     if total_bad:
         action = "left unchanged" if op.on_invalid == "keep" else "set to missing"
-        warnings.append(f"{_plural(total_bad, 'value')} could not be read as a valid phone number for {region} and "
+        where = f'the country in "{op.region_column}"' if op.region_column else region
+        warnings.append(f"{_plural(total_bad, 'value')} could not be read as a valid phone number for {where} and "
                         f"{'was' if total_bad == 1 else 'were'} {action}. Use 'Flag rows' to mark them for review.")
+    return OpResult(out, summary, cells_changed=changed, warnings=warnings,
+                    details={"invalid_counts": invalid_counts, "invalid_samples": invalid_samples, "touched": cols})
+
+
+# --------------------------------------------------------------------------- countries
+
+def standardize_country(df: pd.DataFrame, op: StandardizeCountry) -> OpResult:
+    from app.services.countries import country_code, country_name
+
+    cols = _require_columns(df, op.columns)
+    _require_text(df, cols, "Standardizing country names")
+    out = df.copy(deep=False)
+    invalid_counts: dict[str, int] = {}
+    invalid_samples: list[dict] = []
+    for c in cols:
+        s = df[c]
+        mapping: dict[str, str | None] = {}
+        for value in s.dropna().unique():
+            code = country_code(value)
+            mapping[value] = None if code is None else (code if op.output == "code" else country_name(code))
+        converted = pd.Series([mapping.get(v) if isinstance(v, str) else None for v in s.tolist()],
+                              index=s.index, dtype=STRING_DTYPE)
+        bad = (s.notna() & converted.isna() & (s.str.strip() != "").fillna(False)).fillna(False).astype(bool)
+        if bad.any():
+            invalid_counts[c] = int(bad.sum())
+            for idx in bad[bad].index[: max(0, 20 - len(invalid_samples))]:
+                invalid_samples.append({"row": int(idx) + 1, "column": c, "value": to_jsonable(s.loc[idx])})
+        out[c] = converted.fillna(s.astype(STRING_DTYPE)).astype(STRING_DTYPE)  # unrecognised values stay as they were
+    changed, _ = count_changed_cells(df, out, columns=cols)
+    form = "ISO codes" if op.output == "code" else "full country names"
+    summary = f"Wrote {_plural(changed, 'value')} as {form}." if changed else f"All recognised countries are already written as {form}."
+    warnings = []
+    total_bad = sum(invalid_counts.values())
+    if total_bad:
+        warnings.append(f"{_plural(total_bad, 'value')} {'is' if total_bad == 1 else 'are'} not a recognised country and "
+                        f"{'was' if total_bad == 1 else 'were'} left unchanged. Fix them with Find and replace, or flag them.")
     return OpResult(out, summary, cells_changed=changed, warnings=warnings,
                     details={"invalid_counts": invalid_counts, "invalid_samples": invalid_samples, "touched": cols})
 
@@ -645,10 +726,18 @@ def _flag_mask(df: pd.DataFrame, rule) -> pd.Series:
         return present & ~text.str.fullmatch(EMAIL_RE).fillna(False).astype(bool)
     if rule.check == "invalid_phone":
         region = _check_region(rule.region) if rule.region else None
+        regions, _ = _row_regions(df, rule.region_column, region)
         text = _phone_text(s)
-        valid = {v: parse_phone(v, region) is not None for v in text.dropna().unique()}
-        return present & pd.Series([valid.get(v, False) if isinstance(v, str) else False for v in text.tolist()],
-                                   index=s.index, dtype=bool).__invert__()
+        cache: dict[tuple[str, str | None], bool] = {}
+        ok: list[bool] = []
+        for value, row_region in zip(text.tolist(), regions):
+            if not isinstance(value, str):
+                ok.append(False)
+                continue
+            if (value, row_region) not in cache:
+                cache[(value, row_region)] = parse_phone(value, row_region) is not None
+            ok.append(cache[(value, row_region)])
+        return present & ~pd.Series(ok, index=s.index, dtype=bool)
     if rule.check == "not_number":
         if is_numeric_type(logical_type(s)):
             return pd.Series(False, index=s.index)
@@ -707,6 +796,7 @@ HANDLERS = {
     "split_column": split_column,
     "merge_columns": merge_columns,
     "standardize_phone": standardize_phone,
+    "standardize_country": standardize_country,
     "flag_rows": flag_rows,
 }
 
@@ -722,6 +812,7 @@ LABELS = {
     "split_column": "Split column",
     "merge_columns": "Merge columns",
     "standardize_phone": "Standardize phone numbers",
+    "standardize_country": "Standardize country names",
     "flag_rows": "Flag rows for review",
 }
 
