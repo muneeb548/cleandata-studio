@@ -160,7 +160,10 @@ def _fmt_number(value: float) -> str:
 
 
 def _plural(n: int, word: str) -> str:
-    return f"{n:,} {word}{'' if n == 1 else 's'}"
+    if n == 1:
+        return f"{n:,} {word}"
+    suffix = "es" if word.endswith(("s", "x", "ch", "sh")) else "s"  # address -> addresses
+    return f"{n:,} {word}{suffix}"
 
 
 # --------------------------------------------------------------------------- operations
