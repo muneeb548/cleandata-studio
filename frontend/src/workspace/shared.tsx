@@ -112,7 +112,7 @@ export function ColumnPicker<T extends ColumnOption>({ id, columns, selected, on
           />
         </div>
       )}
-      <div className="scroll-thin max-h-56 overflow-y-auto rounded-md border border-border">
+      <div className="scroll-thin max-h-72 overflow-y-auto rounded-md border border-border">
         {visible.length === 0 && <p className="px-3 py-4 text-center text-caption text-muted-foreground">No matching columns.</p>}
         {visible.map((col, i) => {
           const reason = disabledReason?.(col) ?? null;

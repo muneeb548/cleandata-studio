@@ -83,3 +83,69 @@ def test_to_jsonable_handles_special_values():
     assert profiling.to_jsonable(float("inf")) == "Infinity"
     assert profiling.to_jsonable(pd.Timestamp("2024-01-05")) == "2024-01-05"
     assert profiling.to_jsonable(np.int64(3)) == 3
+
+
+# --------------------------------------------------------------- mixed date formats
+
+def _issue(df, issue_id):
+    return next((i for i in profiling.detect_issues(df) if i["id"] == issue_id), None)
+
+
+def test_mixed_date_formats_are_flagged(frame):
+    df = frame(
+        "order_date\n2026-01-15\n15/01/2026\nJan 15 2026\n2026/01/15\n15/01/2026\n2026-01-15\n"
+    )
+    issue = _issue(df, "dates:order_date")
+    assert issue is not None
+    assert issue["severity"] == "medium"
+    assert issue["title"] == 'Mixed date formats in "order_date"'
+    assert issue["count"] == 4
+    assert issue["suggested_operation"] == "convert_type"
+    assert issue["example"] == "2026-01-15"  # a real value from the data
+    assert '"Jan 15 2026"' in issue["description"] or '"15/01/2026"' in issue["description"]
+
+
+def test_month_name_dates_are_recognised(frame):
+    df = frame('d\n"January 15, 2026"\n"March 3, 2026"\n"December 31, 2025"\n')
+    issue = _issue(df, "dates:d")
+    assert issue is not None
+    assert issue["severity"] == "low"  # one consistent format
+    assert issue["title"] == '"d" looks like dates stored as text'
+
+
+def test_single_numeric_format_keeps_low_severity(frame):
+    df = frame("d\n2024-01-05\n2024-02-10\n2024-03-01\n")
+    issue = _issue(df, "dates:d")
+    assert issue is not None and issue["severity"] == "low"
+
+
+def test_text_with_month_words_is_not_a_date(frame):
+    df = frame("name\nMay Khan\nJune Ali\nMaybe 5 2026\nMarch Brown\n")
+    assert _issue(df, "dates:name") is None
+
+
+def test_day_first_hint(frame):
+    df = frame("d\n15/01/2026\n03/02/2026\n2026-01-15\n")
+    issue = _issue(df, "dates:d")
+    assert issue is not None
+    assert "Day comes first" in issue["description"]
+    assert "tick" in issue["description"] and "unticked" not in issue["description"]
+
+
+def test_month_first_hint(frame):
+    df = frame("d\n01/15/2026\n02/03/2026\n2026-01-15\n")
+    issue = _issue(df, "dates:d")
+    assert issue is not None
+    assert "unticked" in issue["description"]
+
+
+def test_ambiguous_dates_give_no_hint(frame):
+    df = frame("d\n01/02/2026\n03/04/2026\n2026-01-15\n")
+    issue = _issue(df, "dates:d")
+    assert issue is not None
+    assert "Day comes first" not in issue["description"]
+
+
+def test_ordinal_suffixes_count_as_one_format():
+    s = pd.Series(["Mar 3rd 2026", "Mar 15th 2026", "Mar 1 2026"])
+    assert profiling.date_format_summary(s)["formats"] == 1

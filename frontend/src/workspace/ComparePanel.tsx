@@ -278,8 +278,9 @@ export function ComparePanel() {
                   let delta = "—";
                   let improved: boolean | null = null;
                   if (before !== null && after !== null) {
-                    delta = m.pct ? `${after - before >= 0 ? "+" : "−"}${Math.abs(after - before).toFixed(1)} pts` : formatDelta(after, before);
-                    if (after !== before && m.better !== "neutral") improved = m.better === "lower" ? after < before : after > before;
+                                       const diff = m.pct ? Math.round((after - before) * 10) / 10 : after - before;
+                    delta = m.pct ? (diff === 0 ? "0 pts" : `${diff > 0 ? "+" : "−"}${Math.abs(diff).toFixed(1)} pts`) : formatDelta(after, before);
+                    if (diff !== 0 && m.better !== "neutral") improved = m.better === "lower" ? after < before : after > before;
                   }
                   return (
                     <TR key={m.key}>

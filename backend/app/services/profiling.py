@@ -4,6 +4,7 @@ the actual DataFrame; nothing here is hardcoded."""
 from __future__ import annotations
 
 import math
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -147,14 +148,66 @@ def iqr_outliers(series: pd.Series) -> dict | None:
     return {"q1": q1, "q3": q3, "iqr": iqr, "lower": lower, "upper": upper, "mask": mask.fillna(False)}
 
 
+NUMERIC_DATE_RE = r"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}"
+_MONTH = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+    r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"
+)
+_SEP = r"[ \-/.,]*"
+_DAY = r"\d{1,2}(?:st|nd|rd|th)?"
+# "Jan 15 2026", "January 15, 2026", "15 Jan 2026", "15-Jan-2026"
+MONTH_NAME_DATE_RE = (
+    rf"(?:{_DAY}{_SEP}{_MONTH}{_SEP}\d{{2,4}}|{_MONTH}{_SEP}{_DAY}{_SEP}\d{{2,4}})"
+    r"(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?"
+)
+# Numeric dates written day first or month first, e.g. 15/01/2026 or 01/15/2026.
+_DMY_RE = re.compile(r"^\s*(\d{1,2})[-/.](\d{1,2})[-/.]\d{2,4}\b")
+MAX_DATE_SHAPE_VALUES = 5000
+
+
+def _date_like_mask(text: pd.Series) -> pd.Series:
+    numeric = text.str.contains(NUMERIC_DATE_RE, regex=True).fillna(False).astype(bool)
+    named = text.str.strip().str.fullmatch(MONTH_NAME_DATE_RE, flags=re.IGNORECASE).fillna(False).astype(bool)
+    return numeric | named
+
+
 def _looks_like_dates(series: pd.Series) -> bool:
     sample = series.dropna().astype(STRING_DTYPE).head(200)
     if len(sample) < 3:
         return False
-    if not sample.str.contains(r"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}", regex=True).fillna(False).all():
+    if not _date_like_mask(sample).all():
         return False
     parsed = pd.to_datetime(sample, errors="coerce", format="mixed")
     return bool(parsed.notna().mean() >= 0.9)
+
+
+def _date_shape(value: str) -> str:
+    """The layout of a date string: 2026-01-15 -> Y-N-N, 15/01/2026 -> N/N/Y, Jan 15 2026 -> M N Y."""
+    def repl(m: re.Match) -> str:
+        digits = m.group(1)
+        if digits is not None:
+            return "Y" if len(digits) == 4 else "N"
+        return "M"
+    # "3rd" and "15th" count as a plain day number.
+    return re.sub(r"(\d+)(?:st|nd|rd|th)?|[A-Za-z]+", repl, value.strip(), flags=re.IGNORECASE)
+
+
+def date_format_summary(text: pd.Series) -> dict:
+    """Distinct date layouts in a text column, with one real example per layout and a
+    hint about whether numeric dates are written day first."""
+    uniques = text.dropna().astype(STRING_DTYPE).str.strip().drop_duplicates().head(MAX_DATE_SHAPE_VALUES)
+    examples: dict[str, str] = {}
+    day_first = month_first = False
+    for value in uniques:
+        shape = _date_shape(value)
+        examples.setdefault(shape, value)
+        m = _DMY_RE.match(value)
+        if m:
+            first, second = int(m.group(1)), int(m.group(2))
+            day_first = day_first or first > 12
+            month_first = month_first or second > 12
+    hint = "day_first" if day_first and not month_first else "month_first" if month_first and not day_first else None
+    return {"formats": len(examples), "examples": list(examples.values()), "hint": hint}
 
 
 def _n(count: int, word: str) -> str:
@@ -260,9 +313,24 @@ def detect_issues(df: pd.DataFrame, profiles: list[dict] | None = None, stats: d
                         f"Mostly numbers, but {_n(bad, 'value')} {'is' if bad == 1 else 'are'} not numeric.", column=col, count=bad,
                         operation="convert_type")
                 elif _looks_like_dates(text):
-                    add(f"dates:{col}", "low", f'"{col}" looks like dates stored as text',
-                        "Convert it to a datetime column to sort and analyse it correctly.", column=col,
-                        operation="convert_type")
+                    summary = date_format_summary(text)
+                    if summary["hint"] == "day_first":
+                        tip = ' Values like these put the day first, so tick "Day comes first".'
+                    elif summary["hint"] == "month_first":
+                        tip = ' Values like these put the month first, so leave "Day comes first" unticked.'
+                    else:
+                        tip = ""
+                    if summary["formats"] > 1:
+                        shown = ", ".join(f'"{v}"' for v in summary["examples"][:3])
+                        add(f"dates:{col}", "medium", f'Mixed date formats in "{col}"',
+                            f"{summary['formats']} different date formats (e.g. {shown}). "
+                            f"Convert to a date column so every value uses one format and sorts correctly.{tip}",
+                            column=col, count=summary["formats"], operation="convert_type",
+                            example=summary["examples"][0])
+                    else:
+                        add(f"dates:{col}", "low", f'"{col}" looks like dates stored as text',
+                            f"Convert it to a datetime column to sort and analyse it correctly.{tip}", column=col,
+                            operation="convert_type")
                 # Distinct spellings per lowercase value, computed vectorised (fast on large columns).
                 pairs = pd.DataFrame({"low": stripped.str.lower(), "orig": stripped}).drop_duplicates()
                 counts = pairs["low"].value_counts()
