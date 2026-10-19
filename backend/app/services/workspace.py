@@ -227,6 +227,21 @@ def get_outliers(session: Session, column: str) -> dict:
     return outlier_report(session.current, column)
 
 
+def get_values(session: Session, column: str, limit: int = 500) -> dict:
+    """The different values of one column with how often each appears (for value mapping)."""
+    with session.lock:
+        df = session.current
+        if column not in df.columns:
+            raise AppError("unknown_columns", f'Column "{column}" not found.', "Refresh the page and try again.", status=404)
+        counts = _canon(df[column]).dropna().value_counts()
+        return {
+            "column": column,
+            "distinct": int(len(counts)),
+            "values": [{"value": str(v), "count": int(n)} for v, n in counts.head(limit).items()],
+            "truncated": len(counts) > limit,
+        }
+
+
 # --------------------------------------------------------------------------- operations
 
 def _describe(before: pd.DataFrame, op: BaseModel, result) -> dict:

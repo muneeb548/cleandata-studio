@@ -23,7 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ApiError, SESSION_GONE, api } from "@/api/client";
-import type { ColumnProfile, FlagRule, Operation, OperationPreview, OutlierReport, Profile } from "@/api/types";
+import type { ColumnProfile, ColumnValues, FlagRule, Operation, OperationPreview, OutlierReport, Profile } from "@/api/types";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
@@ -44,6 +44,7 @@ import {
   PHONE_REGIONS,
   buildOperation,
   categoryOf,
+  mappingRows,
   columnRestriction,
   formForIssue,
   isNumeric,
@@ -84,6 +85,9 @@ const EXPLANATIONS: Record<CleanChoice, string> = {
   merge_columns: "Joins several columns into one new column, for example first and last name into a full name.",
   standardize_phone: "Writes phone numbers from any country in one format and lists the ones that are not real numbers.",
   standardize_country: "Writes every country the same way, so “USA”, “U.S.A.” and “america” all become “United States”.",
+  clean_email: "Tidies email addresses and lists the ones that cannot be real, so they can be fixed or flagged.",
+  clean_numbers: "Turns amounts written as text, in any currency or number style, into real numbers.",
+  map_values: "Shows every different value in a column so you can rename many of them at once.",
   flag_rows: "Marks rows that need a human decision in a new column, without changing or removing any data.",
 };
 
@@ -93,7 +97,12 @@ const SHORT_LABELS: Partial<Record<CleanChoice, string>> = {
   split_column: "Split",
   merge_columns: "Merge",
   standardize_phone: "Phone numbers",
+  clean_email: "Emails",
   standardize_country: "Country names",
+  convert_type: "Convert type",
+  clean_numbers: "Amounts & currencies",
+  find_replace: "Find & replace",
+  map_values: "Map many values",
 };
 
 function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
@@ -454,6 +463,47 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
         </div>
       );
 
+    case "clean_email":
+      return (
+        <div className="space-y-4">
+          <p className="text-body text-muted-foreground">Removes spaces and “mailto:”, and lists addresses that cannot be real (for example “ali@gmail” or “ali@@gmail.com”).</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Checkbox id="email-lower" checked={form.emailLowercase} onChange={(e) => set({ emailLowercase: e.target.checked })} label="Use lowercase" description="ALI@Gmail.com → ali@gmail.com" />
+            <Checkbox id="email-fix" checked={form.emailFixDomains} onChange={(e) => set({ emailFixDomains: e.target.checked })} label="Fix common provider typos" description="gmial.com → gmail.com, hotmail.con → hotmail.com" />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <RadioCard name="email-invalid" value="keep" checked={form.emailOnInvalid === "keep"} onChange={() => set({ emailOnInvalid: "keep" })} label="Keep invalid addresses" description="They are listed so you can review or flag them." />
+            <RadioCard name="email-invalid" value="set_missing" checked={form.emailOnInvalid === "set_missing"} onChange={() => set({ emailOnInvalid: "set_missing" })} label="Make invalid addresses empty" description="Use only when the client asked for it." />
+          </div>
+          <ColumnPicker id="email-cols" columns={cols} selected={form.emailColumns} onChange={(emailColumns) => set({ emailColumns })} disabledReason={restrict} />
+        </div>
+      );
+
+    case "clean_numbers":
+      return (
+        <div className="space-y-4">
+          <p className="text-body text-muted-foreground">Removes currency signs and codes ($, €, £, Rs, PKR, USD…), spaces and thousands separators, and reads (500) as −500. The result is a real number column you can sum and sort.</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="num-decimal">Decimal mark</Label>
+              <Select id="num-decimal" value={form.numDecimal} onChange={(e) => set({ numDecimal: e.target.value as FormState["numDecimal"] })}>
+                <option value="auto">Detect for each value</option>
+                <option value=".">Dot: 1,234.56 (US, UK, Pakistan, India)</option>
+                <option value=",">Comma: 1.234,56 (most of Europe)</option>
+              </Select>
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <RadioCard name="num-error" value="abort" checked={form.numOnError === "abort"} onChange={() => set({ numOnError: "abort" })} label="Stop and show me the values" description="Nothing changes if any value is not a number." />
+            <RadioCard name="num-error" value="set_missing" checked={form.numOnError === "set_missing"} onChange={() => set({ numOnError: "set_missing" })} label="Set them to missing (reported)" description="Converts everything else." />
+          </div>
+          <ColumnPicker id="num-cols" columns={cols} selected={form.numColumns} onChange={(numColumns) => set({ numColumns })} />
+        </div>
+      );
+
+    case "map_values":
+      return <MapValuesForm form={form} set={set} cols={cols} />;
+
     case "flag_rows":
       return <FlagRulesForm form={form} set={set} cols={cols} />;
 
@@ -475,6 +525,94 @@ function regionName(code: string): string {
   } catch {
     return code;
   }
+}
+
+function MapValuesForm({ form, set, cols }: { form: FormState; set: (patch: Partial<FormState>) => void; cols: ColumnProfile[] }) {
+  const { handleError } = useWorkspace();
+  const [values, setValues] = useState<ColumnValues | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState("");
+  const textCols = cols.filter((c) => c.is_text);
+
+  useEffect(() => {
+    if (!form.mapColumn) {
+      setValues(null);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    api
+      .values(form.mapColumn)
+      .then((v) => active && setValues(v))
+      .catch((err) => active && handleError(err, "Could not load the values"))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.mapColumn]);
+
+  const shown = (values?.values ?? []).filter((v) => v.value.toLowerCase().includes(filter.toLowerCase()));
+  const changes = mappingRows(form.mapEdits).length;
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="map-col">Column</Label>
+          <Select id="map-col" value={form.mapColumn} onChange={(e) => set({ mapColumn: e.target.value, mapEdits: {} })}>
+            <option value="">Choose a text column…</option>
+            {textCols.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <Checkbox id="map-case" className="sm:mt-7" checked={form.mapIgnoreCase} onChange={(e) => set({ mapIgnoreCase: e.target.checked })} label="Ignore capitals and outer spaces" description="“ISB”, “isb ” and “Isb” follow the same row." />
+      </div>
+      {loading && <LoadingBlock />}
+      {values && !loading && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-small text-muted-foreground">
+              {formatNumber(values.distinct)} different values{values.truncated ? `; showing the ${formatNumber(values.values.length)} most common` : ""}. Type the new value next to the ones to change{changes ? ` (${changes} so far)` : ""}.
+            </p>
+            {values.values.length > 8 && (
+              <Input className="max-w-56" aria-label="Filter values" placeholder="Filter values" value={filter} onChange={(e) => setFilter(e.target.value)} />
+            )}
+          </div>
+          <div className="scroll-thin max-h-80 overflow-auto rounded-md border border-border">
+            <Table>
+              <THead>
+                <tr>
+                  <TH scope="col" className="pl-3">Current value</TH>
+                  <TH scope="col" className="text-right">Rows</TH>
+                  <TH scope="col" className="pr-3">Change to</TH>
+                </tr>
+              </THead>
+              <tbody>
+                {shown.map((v) => (
+                  <TR key={v.value}>
+                    <TD className="pl-3 font-medium text-foreground">{v.value}</TD>
+                    <TD className="tabular text-right text-slate-500">{formatNumber(v.count)}</TD>
+                    <TD className="pr-3">
+                      <Input
+                        aria-label={`New value for ${v.value}`}
+                        value={form.mapEdits[v.value] ?? ""}
+                        maxLength={1000}
+                        placeholder="keep as is"
+                        onChange={(e) => set({ mapEdits: { ...form.mapEdits, [v.value]: e.target.value } })}
+                      />
+                    </TD>
+                  </TR>
+                ))}
+              </tbody>
+            </Table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function FlagRulesForm({ form, set, cols }: { form: FormState; set: (patch: Partial<FormState>) => void; cols: ColumnProfile[] }) {
@@ -778,6 +916,9 @@ export function CleanPanel() {
       mergeColumns: keep(f.mergeColumns),
       phoneColumns: keep(f.phoneColumns),
       countryColumns: keep(f.countryColumns),
+      emailColumns: keep(f.emailColumns),
+      numColumns: keep(f.numColumns),
+      mapColumn: names.has(f.mapColumn) ? f.mapColumn : "",
       phoneRegionColumn: names.has(f.phoneRegionColumn) ? f.phoneRegionColumn : "",
       flagRegionColumn: names.has(f.flagRegionColumn) ? f.flagRegionColumn : "",
       splitColumn: names.has(f.splitColumn) ? f.splitColumn : "",

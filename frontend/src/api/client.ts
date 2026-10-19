@@ -1,6 +1,7 @@
 import type {
   AppConfig,
   ApplyResult,
+  ColumnValues,
   CompareResult,
   CompareRowsPage,
   DatasetKind,
@@ -204,6 +205,7 @@ export const api = {
       })}`,
     ),
   outliers: (column: string) => request<OutlierReport>(`/api/outliers${qs({ column })}`),
+  values: (column: string) => request<ColumnValues>(`/api/values${qs({ column })}`),
   preview: (operation: Operation) =>
     request<OperationPreview>("/api/operations/preview", { method: "POST", body: JSON.stringify({ operation }) }),
   /** Operations that can remove data need the preview_token returned by preview(). */

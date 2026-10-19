@@ -27,9 +27,12 @@ MAX_SAFE_INT = 2**53
 # Parameter models live in app.schemas.operations; re-exported here for convenience.
 from app.schemas.operations import (  # noqa: E402,F401
     CleanColumnNames,
+    CleanEmail,
+    CleanNumbers,
     ConvertType,
     FindReplace,
     FlagRows,
+    MapValues,
     MergeColumns,
     MissingValues,
     Operation,
@@ -703,6 +706,235 @@ def standardize_country(df: pd.DataFrame, op: StandardizeCountry) -> OpResult:
                     details={"invalid_counts": invalid_counts, "invalid_samples": invalid_samples, "touched": cols})
 
 
+# --------------------------------------------------------------------------- emails
+
+EMAIL_DOMAIN_FIXES = {
+    "gmial.com": "gmail.com", "gmal.com": "gmail.com", "gamil.com": "gmail.com", "gnail.com": "gmail.com",
+    "gmaill.com": "gmail.com", "gmail.co": "gmail.com", "gmail.con": "gmail.com", "gmail.cm": "gmail.com",
+    "gmail.om": "gmail.com", "gmai.com": "gmail.com", "gmail.comm": "gmail.com",
+    "hotmial.com": "hotmail.com", "hotmal.com": "hotmail.com", "hotmail.con": "hotmail.com", "hotmai.com": "hotmail.com",
+    "hotmail.co": "hotmail.com", "hotmail.cm": "hotmail.com",
+    "yaho.com": "yahoo.com", "yahooo.com": "yahoo.com", "yahoo.con": "yahoo.com", "yahoo.cm": "yahoo.com",
+    "yahoo.co": "yahoo.com", "outlok.com": "outlook.com", "outlook.con": "outlook.com", "outllok.com": "outlook.com",
+    "iclod.com": "icloud.com", "icloud.con": "icloud.com", "icoud.com": "icloud.com",
+}
+
+
+def clean_email(df: pd.DataFrame, op: CleanEmail) -> OpResult:
+    cols = _require_columns(df, op.columns)
+    _require_text(df, cols, "Cleaning emails")
+    out = df.copy(deep=False)
+    invalid_counts: dict[str, int] = {}
+    invalid_samples: list[dict] = []
+    domain_fixes = 0
+    for c in cols:
+        s = df[c]
+        text = s.str.strip().str.replace(r"^mailto:", "", regex=True, flags=re.IGNORECASE)
+        text = text.str.replace(r"\s*([@.])\s*", r"\1", regex=True)  # "ali @ gmail .com"
+        if op.lowercase:
+            text = text.str.lower()
+        if op.fix_domains:
+            fixed_values = []
+            for value in text.tolist():
+                if isinstance(value, str) and "@" in value:
+                    local, _, domain = value.rpartition("@")
+                    better = EMAIL_DOMAIN_FIXES.get(domain.lower())
+                    if better:
+                        domain_fixes += 1
+                        value = f"{local}@{better}"
+                fixed_values.append(value)
+            text = pd.Series(fixed_values, index=s.index, dtype=STRING_DTYPE)
+        text = _blank_to_na(text)
+        valid = text.str.fullmatch(EMAIL_RE).fillna(False).astype(bool)
+        bad = (text.notna() & ~valid).fillna(False).astype(bool)
+        if bad.any():
+            invalid_counts[c] = int(bad.sum())
+            for idx in bad[bad].index[: max(0, 20 - len(invalid_samples))]:
+                invalid_samples.append({"row": int(idx) + 1, "column": c, "value": to_jsonable(s.loc[idx])})
+        if op.on_invalid == "set_missing":
+            text = text.mask(bad, pd.NA)
+        out[c] = text.astype(STRING_DTYPE)
+    changed, _ = count_changed_cells(df, out, columns=cols)
+    summary = f"Cleaned {_plural(changed, 'email address')}." if changed else "All email addresses are already tidy."
+    warnings = []
+    if domain_fixes:
+        warnings.append(f"Corrected the provider in {_plural(domain_fixes, 'address')} (for example gmial.com -> gmail.com). "
+                        "Check them in the preview.")
+    total_bad = sum(invalid_counts.values())
+    if total_bad:
+        action = "kept (tidied)" if op.on_invalid == "keep" else "set to missing"
+        warnings.append(f"{_plural(total_bad, 'value')} {'is' if total_bad == 1 else 'are'} not a valid email address and "
+                        f"{'was' if total_bad == 1 else 'were'} {action}. Use 'Flag rows' to mark them for review.")
+    return OpResult(out, summary, cells_changed=changed, warnings=warnings,
+                    details={"invalid_counts": invalid_counts, "invalid_samples": invalid_samples,
+                             "domain_fixes": domain_fixes, "touched": cols})
+
+
+# --------------------------------------------------------------------------- amounts and currencies
+
+_CURRENCY_SYMBOL_RE = re.compile(r"US\$|C\$|A\$|NZ\$|R\$|HK\$|S\$|[$€£¥₹₨₩₽₺₦₱฿₫₪]", re.IGNORECASE)
+_CURRENCY_WORD_RE = re.compile(
+    r"\b(?:usd|eur|gbp|pkr|inr|aed|sar|qar|kwd|omr|bhd|cad|aud|nzd|jpy|cny|rmb|chf|sek|nok|dkk|pln|czk|huf|try|"
+    r"zar|ngn|kes|egp|bdt|lkr|npr|myr|sgd|hkd|php|thb|idr|vnd|krw|brl|mxn|ars|clp|cop|pen|rs|rupees?|dollars?|"
+    r"euros?|pounds?)\b\.?",
+    re.IGNORECASE,
+)
+
+
+# 1,234,567 (international) or 12,34,567 (lakh/crore grouping used in Pakistan and India)
+_COMMA_GROUPS = r"\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3}"
+
+
+def _guess_decimal(s: str) -> tuple[str, bool]:
+    """The decimal mark of a number written with separators, and whether that was a guess."""
+    has_comma, has_dot = "," in s, "." in s
+    if has_comma and has_dot:
+        return ("." if s.rfind(".") > s.rfind(",") else ","), False
+    if has_comma:
+        if re.fullmatch(_COMMA_GROUPS, s):
+            return ".", bool(re.fullmatch(r"\d{1,3},\d{3}", s))  # "1,250": US thousands, but 1.25 in Europe
+        return ",", False
+    if has_dot:
+        if re.fullmatch(r"\d{1,3}(?:\.\d{3}){2,}", s):
+            return ",", False  # "1.234.567"
+        return ".", bool(re.fullmatch(r"\d{1,3}\.\d{3}", s))  # "1.250": 1.25, or 1250 in Europe
+    return ".", False
+
+
+def parse_amount(raw: str, decimal: str = "auto") -> tuple[float | None, str | None, bool]:
+    """(number, currency mark, ambiguous) for text like "$1,250.00", "Rs 1,250", "1.234,56 €" or "(500)"."""
+    s = raw.strip()
+    currency = None
+    match = _CURRENCY_SYMBOL_RE.search(s) or _CURRENCY_WORD_RE.search(s)
+    if match:
+        currency = match.group(0).upper().rstrip(".")
+        currency = {"RS": "Rs", "RUPEE": "Rs", "RUPEES": "Rs", "DOLLAR": "$", "DOLLARS": "$", "EURO": "€",
+                    "EUROS": "€", "POUND": "£", "POUNDS": "£"}.get(currency, currency)
+    s = _CURRENCY_WORD_RE.sub("", _CURRENCY_SYMBOL_RE.sub("", s))
+    s = re.sub(r"[   ]", " ", s).strip()
+    negative = False
+    if s.startswith("(") and s.endswith(")"):
+        negative, s = True, s[1:-1].strip()
+    if s.endswith("-"):
+        negative, s = True, s[:-1].strip()
+    if s.startswith("-"):
+        negative, s = True, s[1:].strip()
+    elif s.startswith("+"):
+        s = s[1:].strip()
+    s = re.sub(r"(?<=\d)[ '’](?=\d{3}(?!\d))", "", s)  # 1 234 567 / 1'234
+    if not re.fullmatch(r"[\d.,]*\d[\d.,]*", s):
+        return None, currency, False
+    ambiguous = False
+    if decimal == "auto":
+        dec, ambiguous = _guess_decimal(s)
+    else:
+        dec = decimal
+    thousands = "," if dec == "." else "."
+    if s.count(dec) > 1:
+        return None, currency, False
+    whole, _, frac = s.partition(dec)
+    if thousands in frac:
+        return None, currency, False
+    if thousands in whole:
+        groups = _COMMA_GROUPS if thousands == "," else r"\d{1,3}(?:\.\d{3})+"
+        if not re.fullmatch(groups, whole):
+            return None, currency, False
+        whole = whole.replace(thousands, "")
+    number = float(f"{whole or '0'}.{frac or '0'}")
+    return (-number if negative else number), currency, ambiguous
+
+
+def clean_numbers(df: pd.DataFrame, op: CleanNumbers) -> OpResult:
+    cols = _require_columns(df, op.columns)
+    out = df.copy(deep=False)
+    invalid_counts: dict[str, int] = {}
+    invalid_samples: list[dict] = []
+    currencies: dict[str, set[str]] = {}
+    ambiguous_total = 0
+    for c in cols:
+        s = df[c]
+        text = _canon(s).str.strip()
+        cache: dict[str, tuple[float | None, str | None, bool]] = {}
+        numbers: list[float | None] = []
+        bad_flags: list[bool] = []
+        for value in text.tolist():
+            if not isinstance(value, str) or value == "":
+                numbers.append(None)
+                bad_flags.append(False)
+                continue
+            if value not in cache:
+                cache[value] = parse_amount(value, op.decimal)
+            number, currency, ambiguous = cache[value]
+            numbers.append(number)
+            bad_flags.append(number is None)
+            if currency:
+                currencies.setdefault(c, set()).add(currency)
+            ambiguous_total += int(ambiguous)
+        bad = pd.Series(bad_flags, index=s.index, dtype=bool)
+        if bad.any():
+            invalid_counts[c] = int(bad.sum())
+            for idx in bad[bad].index[: max(0, 20 - len(invalid_samples))]:
+                invalid_samples.append({"row": int(idx) + 1, "column": c, "value": to_jsonable(s.loc[idx])})
+        out[c] = pd.Series(numbers, index=s.index, dtype="Float64")
+    total_bad = sum(invalid_counts.values())
+    details = {"invalid_counts": invalid_counts, "invalid_samples": invalid_samples, "target": "float",
+               "currencies": {c: sorted(v) for c, v in currencies.items()}}
+    if total_bad and op.on_error == "abort":
+        return OpResult(df.copy(deep=False), f"{_plural(total_bad, 'value')} cannot be read as a number.", details=details,
+                        blocked=f"{_plural(total_bad, 'value')} cannot be read as a number. Fix them, or choose to "
+                                "set values that are not numbers to missing.")
+    changed, _ = count_changed_cells(df, out, columns=cols)
+    summary = f"Converted {_plural(len(cols), 'column')} to numbers."
+    warnings = []
+    for c, marks in currencies.items():
+        if len(marks) > 1:
+            warnings.append(f'"{c}" mixes currencies ({", ".join(sorted(marks))}). The numbers were kept as they are, '
+                            "not converted between currencies.")
+    if ambiguous_total and op.decimal == "auto":
+        warnings.append(f"{_plural(ambiguous_total, 'value')} like 1,250 or 1.250 can be read two ways and "
+                        "were read the US/UK way (1,250 = 1250 and 1.250 = 1.25). If the file uses the European "
+                        "format, choose the comma as the decimal mark.")
+    if total_bad:
+        summary += f" {_plural(total_bad, 'value')} that are not numbers were set to missing."
+        warnings.append(f"{_plural(total_bad, 'value')} could not be read as a number and became missing.")
+    return OpResult(out, summary, cells_changed=changed, warnings=warnings,
+                    details={**details, "renamed": 1, "touched": cols})
+
+
+# --------------------------------------------------------------------------- value mapping
+
+def map_values(df: pd.DataFrame, op: MapValues) -> OpResult:
+    cols = _require_columns(df, op.columns)
+    _require_text(df, cols, "Mapping values")
+    table: dict[str, str] = {}
+    for m in op.mappings:
+        key = m.value.strip().lower() if op.ignore_case else m.value
+        if key in table and table[key] != m.to:
+            raise AppError("conflicting_mapping", f'"{m.value}" is mapped to two different values.',
+                           "Keep one row for each value.")
+        table[key] = m.to
+    out = df.copy(deep=False)
+    used: set[str] = set()
+    for c in cols:
+        s = df[c]
+        keys = (s.str.strip().str.lower() if op.ignore_case else s).tolist()
+        hits = [isinstance(k, str) and k in table for k in keys]
+        replacement = pd.Series([table[k] if hit else None for k, hit in zip(keys, hits)], index=s.index, dtype=STRING_DTYPE)
+        replacement = replacement.mask((replacement == "").fillna(False).astype(bool), pd.NA)
+        hit = pd.Series(hits, index=s.index, dtype=bool)
+        used.update(k for k, h in zip(keys, hits) if h)
+        out[c] = s.where(~hit, replacement).astype(STRING_DTYPE)
+    changed, _ = count_changed_cells(df, out, columns=cols)
+    summary = f"Replaced {_plural(changed, 'value')} using {_plural(len(table), 'mapping')}." if changed \
+        else "No values changed: every mapped value is already as it should be, or was not found."
+    warnings = []
+    unused = [m.value for m in op.mappings if (m.value.strip().lower() if op.ignore_case else m.value) not in used]
+    if unused:
+        shown = ", ".join(f'"{v}"' for v in unused[:5]) + (", ..." if len(unused) > 5 else "")
+        warnings.append(f"{_plural(len(unused), 'mapping')} matched nothing in the selected columns: {shown}.")
+    return OpResult(out, summary, cells_changed=changed, warnings=warnings, details={"touched": cols})
+
+
 # --------------------------------------------------------------------------- review flags
 
 EMAIL_RE = r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}"
@@ -797,6 +1029,9 @@ HANDLERS = {
     "merge_columns": merge_columns,
     "standardize_phone": standardize_phone,
     "standardize_country": standardize_country,
+    "clean_email": clean_email,
+    "clean_numbers": clean_numbers,
+    "map_values": map_values,
     "flag_rows": flag_rows,
 }
 
@@ -813,6 +1048,9 @@ LABELS = {
     "merge_columns": "Merge columns",
     "standardize_phone": "Standardize phone numbers",
     "standardize_country": "Standardize country names",
+    "clean_email": "Clean email addresses",
+    "clean_numbers": "Clean numbers and currencies",
+    "map_values": "Map values",
     "flag_rows": "Flag rows for review",
 }
 

@@ -78,7 +78,11 @@ export function PreviewResult({ preview, mode }: { preview: OperationPreview; mo
               ? "Values that are not valid phone numbers"
               : preview.operation.type === "standardize_country"
                 ? "Values that are not recognised countries"
-                : "Values that cannot be converted"}
+                : preview.operation.type === "clean_email"
+                  ? "Values that are not valid email addresses"
+                  : preview.operation.type === "clean_numbers"
+                    ? "Values that are not numbers"
+                    : "Values that cannot be converted"}
             {details.invalid_counts && (
               <span className="ml-2 font-normal text-muted-foreground">
                 ({Object.entries(details.invalid_counts).map(([c, n]) => `${c}: ${n}`).join(", ")})

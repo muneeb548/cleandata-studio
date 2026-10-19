@@ -1,5 +1,5 @@
 import type { ColumnProfile } from "@/api/types";
-import { DEFAULT_FORM, buildOperation, columnRestriction, formForIssue } from "./operationForms";
+import { DEFAULT_FORM, buildOperation, columnRestriction, formForIssue, mappingRows } from "./operationForms";
 
 const col = (name: string, type: ColumnProfile["type"], is_text = true): ColumnProfile => ({
   name,
@@ -142,6 +142,39 @@ describe("new cleaning operations", () => {
       type: "standardize_country",
       columns: ["c"],
       output: "code",
+    });
+  });
+});
+
+describe("emails, amounts and value mapping", () => {
+  it("builds email cleanup with safe defaults", () => {
+    expect(buildOperation("clean_email", DEFAULT_FORM).error).toMatch(/column/);
+    expect(buildOperation("clean_email", { ...DEFAULT_FORM, emailColumns: ["e"] }).operation).toEqual({
+      type: "clean_email",
+      columns: ["e"],
+      lowercase: true,
+      fix_domains: false,
+      on_invalid: "keep",
+    });
+  });
+
+  it("builds number cleanup that stops on bad values by default", () => {
+    expect(buildOperation("clean_numbers", { ...DEFAULT_FORM, numColumns: ["amount"] }).operation).toEqual({
+      type: "clean_numbers",
+      columns: ["amount"],
+      decimal: "auto",
+      on_error: "abort",
+    });
+  });
+
+  it("only sends mapping rows that change something", () => {
+    expect(mappingRows({ a: "", b: "b", c: " C ", d: "  " })).toEqual([{ value: "c", to: "C" }]);
+    expect(buildOperation("map_values", { ...DEFAULT_FORM, mapColumn: "city" }).error).toMatch(/new value/);
+    expect(buildOperation("map_values", { ...DEFAULT_FORM, mapColumn: "city", mapEdits: { isb: "Islamabad" } }).operation).toEqual({
+      type: "map_values",
+      columns: ["city"],
+      mappings: [{ value: "isb", to: "Islamabad" }],
+      ignore_case: true,
     });
   });
 });

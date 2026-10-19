@@ -204,6 +204,47 @@ class StandardizeCountry(_Op):
     output: Literal["name", "code"] = Field("name", description='name: "United States"; code: "US" (ISO 3166-1).')
 
 
+class CleanEmail(_Op):
+    """Tidy email addresses (spaces, capitals, "mailto:") and report the ones that are not valid."""
+
+    type: Literal["clean_email"]
+    columns: ColumnList = Field(default_factory=list)
+    lowercase: bool = Field(True, description="ALI@Gmail.com -> ali@gmail.com.")
+    fix_domains: bool = Field(
+        False, description="Fix common typos of big email providers: gmial.com -> gmail.com, hotmail.con -> hotmail.com."
+    )
+    on_invalid: Literal["keep", "set_missing"] = "keep"
+
+
+class CleanNumbers(_Op):
+    """Turn amounts written as text ("$1,250.00", "Rs 1,250", "1.234,56 €", "(500)") into real numbers."""
+
+    type: Literal["clean_numbers"]
+    columns: ColumnList = Field(default_factory=list)
+    decimal: Literal["auto", ".", ","] = Field(
+        "auto", description='auto: decide per value; ".": 1,234.56 (US/UK); ",": 1.234,56 (most of Europe).'
+    )
+    on_error: Literal["abort", "set_missing"] = Field(
+        "abort", description="abort: refuse to apply if a value is not a number; set_missing: convert and report them."
+    )
+
+
+class ValueMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: Annotated[str, StringConstraints(max_length=1000)] = Field(description="The value as it appears now.")
+    to: Annotated[str, StringConstraints(max_length=1000)] = Field(description="What it should become. Empty = missing.")
+
+
+class MapValues(_Op):
+    """Replace many values at once from a table, e.g. "pend.", "P" and "pending" -> "Pending"."""
+
+    type: Literal["map_values"]
+    columns: ColumnList = Field(default_factory=list)
+    mappings: Annotated[list[ValueMapping], Field(min_length=1, max_length=1000)]
+    ignore_case: bool = Field(True, description="Also match the values written in other capitals and with outer spaces.")
+
+
 class FlagRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -249,6 +290,9 @@ Operation = Annotated[
         MergeColumns,
         StandardizePhone,
         StandardizeCountry,
+        CleanEmail,
+        CleanNumbers,
+        MapValues,
         FlagRows,
     ],
     Field(discriminator="type"),
@@ -257,7 +301,7 @@ Operation = Annotated[
 OPERATION_MODELS: dict[str, type[_Op]] = {
     m.model_fields["type"].annotation.__args__[0]: m  # type: ignore[union-attr]
     for m in (RemoveDuplicates, MissingValues, TrimWhitespace, StandardizeText, CleanColumnNames, ConvertType, RemoveEmpty,
-              FindReplace, SplitColumn, MergeColumns, StandardizePhone, StandardizeCountry, FlagRows)
+              FindReplace, SplitColumn, MergeColumns, StandardizePhone, StandardizeCountry, CleanEmail, CleanNumbers, MapValues, FlagRows)
 }
 
 

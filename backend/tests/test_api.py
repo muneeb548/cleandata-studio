@@ -77,7 +77,7 @@ def test_openapi_documents_every_endpoint():
         "/api/rows": {"get"}, "/api/outliers": {"get"}, "/api/operations": {"get"},
         "/api/operations/preview": {"post"}, "/api/operations/apply": {"post"}, "/api/history": {"get"},
         "/api/undo": {"post"}, "/api/reset": {"post"}, "/api/compare": {"get"}, "/api/compare/rows": {"get"},
-        "/api/export": {"get"}, "/api/health": {"get"}, "/api/config": {"get"},
+        "/api/export": {"get"}, "/api/health": {"get"}, "/api/config": {"get"}, "/api/values": {"get"},
     }
     for path, methods in expected.items():
         assert methods <= set(paths[path]), path
@@ -239,7 +239,7 @@ def test_operations_catalog():
     r = client.get("/api/operations")
     assert r.status_code == 200
     types = {o["type"]: o for o in r.json()}
-    assert len(types) == 13 and types["remove_duplicates"]["may_remove_data"] is True
+    assert len(types) == 16 and types["remove_duplicates"]["may_remove_data"] is True
     assert types["trim_whitespace"]["may_remove_data"] is False
 
 

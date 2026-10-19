@@ -50,6 +50,16 @@ export type FormState = {
   flagRegionColumn: string;
   countryColumns: string[];
   countryOutput: "name" | "code";
+  emailColumns: string[];
+  emailLowercase: boolean;
+  emailFixDomains: boolean;
+  emailOnInvalid: "keep" | "set_missing";
+  numColumns: string[];
+  numDecimal: "auto" | "." | ",";
+  numOnError: "abort" | "set_missing";
+  mapColumn: string;
+  mapEdits: Record<string, string>;
+  mapIgnoreCase: boolean;
 };
 
 export const DEFAULT_FORM: FormState = {
@@ -96,7 +106,24 @@ export const DEFAULT_FORM: FormState = {
   flagRegionColumn: "",
   countryColumns: [],
   countryOutput: "name",
+  emailColumns: [],
+  emailLowercase: true,
+  emailFixDomains: false,
+  emailOnInvalid: "keep",
+  numColumns: [],
+  numDecimal: "auto",
+  numOnError: "abort",
+  mapColumn: "",
+  mapEdits: {},
+  mapIgnoreCase: true,
 };
+
+/** Rows of the mapping table that actually change something. */
+export function mappingRows(edits: Record<string, string>): { value: string; to: string }[] {
+  return Object.entries(edits)
+    .filter(([value, to]) => to.trim() !== "" && to.trim() !== value)
+    .map(([value, to]) => ({ value, to: to.trim() }));
+}
 
 /** Countries offered for phone numbers written without a + country code (any other code can be typed). */
 export const PHONE_REGIONS = [
@@ -128,6 +155,8 @@ export function columnRestriction(choice: CleanChoice, form: FormState, col: Col
     case "find_replace":
     case "split_column":
     case "standardize_country":
+    case "clean_email":
+    case "map_values":
       return col.is_text ? null : "Not text";
     default:
       return null;
@@ -251,6 +280,28 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
         },
       };
     }
+    case "clean_email":
+      return f.emailColumns.length
+        ? {
+            operation: {
+              type: "clean_email",
+              columns: f.emailColumns,
+              lowercase: f.emailLowercase,
+              fix_domains: f.emailFixDomains,
+              on_invalid: f.emailOnInvalid,
+            },
+          }
+        : { error: "Select at least one column." };
+    case "clean_numbers":
+      return f.numColumns.length
+        ? { operation: { type: "clean_numbers", columns: f.numColumns, decimal: f.numDecimal, on_error: f.numOnError } }
+        : { error: "Select at least one column." };
+    case "map_values": {
+      if (!f.mapColumn) return { error: "Choose a column." };
+      const mappings = mappingRows(f.mapEdits);
+      if (!mappings.length) return { error: "Type a new value next to at least one value." };
+      return { operation: { type: "map_values", columns: [f.mapColumn], mappings, ignore_case: f.mapIgnoreCase } };
+    }
     case "standardize_country":
       return f.countryColumns.length
         ? { operation: { type: "standardize_country", columns: f.countryColumns, output: f.countryOutput } }
@@ -314,6 +365,9 @@ export const CHOICES: { id: CleanChoice; label: string; description: string }[] 
   { id: "merge_columns", label: "Merge columns", description: "Several columns into one new column." },
   { id: "standardize_phone", label: "Standardize phone numbers", description: "One format for numbers from any country." },
   { id: "standardize_country", label: "Standardize country names", description: "USA, U.S.A., america → United States." },
+  { id: "clean_email", label: "Clean email addresses", description: "Spaces, capitals, mailto: and invalid emails." },
+  { id: "clean_numbers", label: "Clean numbers and currencies", description: "$1,250.00, Rs 1,25,000, 1.234,56 € → numbers." },
+  { id: "map_values", label: "Map values", description: "Replace many values at once from a table." },
   { id: "flag_rows", label: "Flag rows for review", description: "Add a column explaining which rows need attention." },
 ];
 
@@ -336,12 +390,12 @@ export const CATEGORIES: { id: CategoryId; label: string; description: string; c
   { id: "missing", label: "Missing values", description: "Fill or remove empty cells", choices: ["missing_values"] },
   { id: "text", label: "Text cleaning", description: "Spaces and capitalisation", choices: ["trim_whitespace", "standardize_text"] },
   { id: "columns", label: "Column names", description: "Tidy and de-duplicate headers", choices: ["clean_column_names"] },
-  { id: "types", label: "Data types", description: "Numbers, dates or text", choices: ["convert_type"] },
+  { id: "types", label: "Data types", description: "Numbers, dates, currencies", choices: ["convert_type", "clean_numbers"] },
   { id: "outliers", label: "Outliers", description: "Review unusual numbers", choices: ["outliers"] },
   { id: "empty", label: "Empty rows & columns", description: "Drop fully empty rows or columns", choices: ["remove_empty"] },
-  { id: "replace", label: "Find & replace", description: "Change specific values", choices: ["find_replace"] },
+  { id: "replace", label: "Find & replace", description: "Change one or many values", choices: ["find_replace", "map_values"] },
   { id: "split", label: "Split & merge", description: "Split or join columns", choices: ["split_column", "merge_columns"] },
-  { id: "phone", label: "Phones & countries", description: "One format, any country", choices: ["standardize_phone", "standardize_country"] },
+  { id: "phone", label: "Contact details", description: "Phones, emails, countries", choices: ["standardize_phone", "clean_email", "standardize_country"] },
   { id: "flags", label: "Flag for review", description: "Mark rows that need checking", choices: ["flag_rows"] },
 ];
 

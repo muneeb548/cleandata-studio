@@ -148,7 +148,17 @@ export type OperationType =
   | "merge_columns"
   | "standardize_phone"
   | "standardize_country"
+  | "clean_email"
+  | "clean_numbers"
+  | "map_values"
   | "flag_rows";
+
+export interface ColumnValues {
+  column: string;
+  distinct: number;
+  values: { value: string; count: number }[];
+  truncated: boolean;
+}
 
 export type FlagCheck = "missing" | "invalid_email" | "invalid_phone" | "not_number" | "not_date" | "duplicate_value";
 export type FlagRule = { column: string; check: FlagCheck; region?: string | null; region_column?: string | null };
@@ -199,6 +209,9 @@ export type Operation =
       on_invalid: "keep" | "set_missing";
     }
   | { type: "standardize_country"; columns: string[]; output: "name" | "code" }
+  | { type: "clean_email"; columns: string[]; lowercase: boolean; fix_domains: boolean; on_invalid: "keep" | "set_missing" }
+  | { type: "clean_numbers"; columns: string[]; decimal: "auto" | "." | ","; on_error: "abort" | "set_missing" }
+  | { type: "map_values"; columns: string[]; mappings: { value: string; to: string }[]; ignore_case: boolean }
   | { type: "flag_rows"; rules: FlagRule[]; column_name: string };
 
 export interface CellChange {

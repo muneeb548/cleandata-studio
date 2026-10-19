@@ -245,6 +245,18 @@ class HistoryResponse(_Model):
     can_undo: bool
 
 
+class ValueCount(_Model):
+    value: str
+    count: int
+
+
+class ColumnValues(_Model):
+    column: str
+    distinct: int = Field(description="Number of different non-empty values in the column.")
+    values: list[ValueCount] = Field(description="Most frequent first.")
+    truncated: bool = Field(description="True when there are more different values than were returned.")
+
+
 class OutlierRow(_Model):
     row: int
     value: Cell
