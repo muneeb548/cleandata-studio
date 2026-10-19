@@ -2,7 +2,7 @@
  * Pure helpers that turn the cleaning form state into an API operation.
  * Kept free of React so they are easy to unit test.
  */
-import type { ColumnProfile, Operation, OperationType } from "@/api/types";
+import type { ColumnProfile, FlagRule, Operation, OperationType } from "@/api/types";
 
 export type CleanChoice = OperationType | "outliers";
 
@@ -29,6 +29,22 @@ export type FormState = {
   frMatch: "exact" | "contains";
   frCaseSensitive: boolean;
   outlierColumn: string;
+  splitColumn: string;
+  splitSeparator: string;
+  splitNames: string[];
+  splitFrom: "start" | "end";
+  splitKeep: boolean;
+  mergeColumns: string[];
+  mergeSeparator: string;
+  mergeName: string;
+  mergeKeep: boolean;
+  phoneColumns: string[];
+  phoneRegion: string;
+  phoneFormat: "national" | "international" | "e164";
+  phoneOnInvalid: "keep" | "set_missing";
+  flagRules: FlagRule[];
+  flagColumnName: string;
+  flagRegion: string;
 };
 
 export const DEFAULT_FORM: FormState = {
@@ -54,7 +70,40 @@ export const DEFAULT_FORM: FormState = {
   frMatch: "exact",
   frCaseSensitive: false,
   outlierColumn: "",
+  splitColumn: "",
+  splitSeparator: " ",
+  splitNames: ["first_name", "last_name"],
+  splitFrom: "start",
+  splitKeep: true,
+  mergeColumns: [],
+  mergeSeparator: " ",
+  mergeName: "",
+  mergeKeep: true,
+  phoneColumns: [],
+  phoneRegion: "US",
+  phoneFormat: "international",
+  phoneOnInvalid: "keep",
+  flagRules: [],
+  flagColumnName: "needs_review",
+  flagRegion: "",
 };
+
+/** Countries offered for phone numbers written without a + country code (any other code can be typed). */
+export const PHONE_REGIONS = [
+  "US", "GB", "CA", "AU", "NZ", "IE", "DE", "FR", "ES", "IT", "NL", "BE", "CH", "AT", "SE", "NO", "DK", "FI",
+  "PL", "PT", "GR", "CZ", "RO", "HU", "TR", "AE", "SA", "QA", "KW", "OM", "BH", "EG", "ZA", "NG", "KE", "IN",
+  "PK", "BD", "LK", "NP", "CN", "JP", "KR", "SG", "MY", "ID", "PH", "TH", "VN", "HK", "BR", "MX", "AR", "CL",
+  "CO", "PE", "IL", "UA",
+] as const;
+
+export const FLAG_CHECKS: { value: FlagRule["check"]; label: string }[] = [
+  { value: "missing", label: "Missing value" },
+  { value: "invalid_email", label: "Invalid email" },
+  { value: "invalid_phone", label: "Invalid phone number" },
+  { value: "not_number", label: "Not a number" },
+  { value: "not_date", label: "Not a date" },
+  { value: "duplicate_value", label: "Repeated value (e.g. same email twice)" },
+];
 
 export const isNumeric = (c: Pick<ColumnProfile, "type">) => c.type === "integer" || c.type === "decimal";
 
@@ -67,6 +116,7 @@ export function columnRestriction(choice: CleanChoice, form: FormState, col: Col
     case "trim_whitespace":
     case "standardize_text":
     case "find_replace":
+    case "split_column":
       return col.is_text ? null : "Not text";
     default:
       return null;
@@ -130,6 +180,59 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
           case_sensitive: f.frCaseSensitive,
         },
       };
+    case "split_column": {
+      if (!f.splitColumn) return { error: "Choose the column to split." };
+      if (!f.splitSeparator) return { error: "Enter the separator between the parts." };
+      const names = f.splitNames.map((n) => n.trim());
+      if (names.length < 2 || names.some((n) => !n)) return { error: "Give every new column a name." };
+      if (new Set(names).size !== names.length) return { error: "The new column names must be different." };
+      return {
+        operation: {
+          type: "split_column",
+          column: f.splitColumn,
+          separator: f.splitSeparator,
+          names,
+          split_from: f.splitFrom,
+          keep_original: f.splitKeep,
+        },
+      };
+    }
+    case "merge_columns":
+      if (f.mergeColumns.length < 2) return { error: "Select at least two columns to merge." };
+      if (!f.mergeName.trim()) return { error: "Enter a name for the new column." };
+      return {
+        operation: {
+          type: "merge_columns",
+          columns: f.mergeColumns,
+          separator: f.mergeSeparator,
+          new_name: f.mergeName.trim(),
+          keep_originals: f.mergeKeep,
+        },
+      };
+    case "standardize_phone":
+      if (!f.phoneColumns.length) return { error: "Select at least one column." };
+      if (!/^[A-Za-z]{2}$/.test(f.phoneRegion)) return { error: "Choose the country of numbers written without a + code." };
+      return {
+        operation: {
+          type: "standardize_phone",
+          columns: f.phoneColumns,
+          region: f.phoneRegion.toUpperCase(),
+          format: f.phoneFormat,
+          on_invalid: f.phoneOnInvalid,
+        },
+      };
+    case "flag_rows": {
+      if (!f.flagRules.length) return { error: "Add at least one check." };
+      if (!f.flagColumnName.trim()) return { error: "Enter a name for the review column." };
+      const region = /^[A-Za-z]{2}$/.test(f.flagRegion) ? f.flagRegion.toUpperCase() : null;
+      return {
+        operation: {
+          type: "flag_rows",
+          rules: f.flagRules.map((r) => (r.check === "invalid_phone" ? { ...r, region } : { column: r.column, check: r.check })),
+          column_name: f.flagColumnName.trim(),
+        },
+      };
+    }
     case "outliers":
       return { error: "Outlier review does not change data." };
   }
@@ -185,9 +288,24 @@ export const CHOICES: { id: CleanChoice; label: string; description: string }[] 
   { id: "remove_empty", label: "Remove empty rows/columns", description: "Drop rows or columns with no values." },
   { id: "find_replace", label: "Find and replace", description: "Replace values in selected columns." },
   { id: "outliers", label: "Review outliers", description: "IQR check for numeric columns. Read-only." },
+  { id: "split_column", label: "Split column", description: "One column into several, e.g. first and last name." },
+  { id: "merge_columns", label: "Merge columns", description: "Several columns into one new column." },
+  { id: "standardize_phone", label: "Standardize phone numbers", description: "One format for numbers from any country." },
+  { id: "flag_rows", label: "Flag rows for review", description: "Add a column explaining which rows need attention." },
 ];
 
-export type CategoryId = "duplicates" | "missing" | "text" | "columns" | "types" | "outliers" | "empty" | "replace";
+export type CategoryId =
+  | "duplicates"
+  | "missing"
+  | "text"
+  | "columns"
+  | "types"
+  | "outliers"
+  | "empty"
+  | "replace"
+  | "split"
+  | "phone"
+  | "flags";
 
 /** Operations grouped the way users think about cleaning. */
 export const CATEGORIES: { id: CategoryId; label: string; description: string; choices: CleanChoice[] }[] = [
@@ -199,6 +317,9 @@ export const CATEGORIES: { id: CategoryId; label: string; description: string; c
   { id: "outliers", label: "Outliers", description: "Review unusual numbers", choices: ["outliers"] },
   { id: "empty", label: "Empty rows & columns", description: "Drop fully empty rows or columns", choices: ["remove_empty"] },
   { id: "replace", label: "Find & replace", description: "Change specific values", choices: ["find_replace"] },
+  { id: "split", label: "Split & merge", description: "Split or join columns", choices: ["split_column", "merge_columns"] },
+  { id: "phone", label: "Phone numbers", description: "One format, any country", choices: ["standardize_phone"] },
+  { id: "flags", label: "Flag for review", description: "Mark rows that need checking", choices: ["flag_rows"] },
 ];
 
 export function categoryOf(choice: CleanChoice): CategoryId {

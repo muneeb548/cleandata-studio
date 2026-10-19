@@ -239,7 +239,7 @@ def test_operations_catalog():
     r = client.get("/api/operations")
     assert r.status_code == 200
     types = {o["type"]: o for o in r.json()}
-    assert len(types) == 8 and types["remove_duplicates"]["may_remove_data"] is True
+    assert len(types) == 12 and types["remove_duplicates"]["may_remove_data"] is True
     assert types["trim_whitespace"]["may_remove_data"] is False
 
 

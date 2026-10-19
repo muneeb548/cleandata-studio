@@ -73,3 +73,59 @@ describe("formForIssue", () => {
     expect(formForIssue("convert_type", "d", "dates:d", [col("d", "text")], DEFAULT_FORM).convTarget).toBe("datetime");
   });
 });
+
+describe("new cleaning operations", () => {
+  it("builds a split with trimmed, distinct names", () => {
+    expect(buildOperation("split_column", DEFAULT_FORM).error).toMatch(/column to split/);
+    const f = { ...DEFAULT_FORM, splitColumn: "full_name", splitNames: [" first ", "last"] };
+    expect(buildOperation("split_column", f).operation).toEqual({
+      type: "split_column",
+      column: "full_name",
+      separator: " ",
+      names: ["first", "last"],
+      split_from: "start",
+      keep_original: true,
+    });
+    expect(buildOperation("split_column", { ...f, splitNames: ["a", "a"] }).error).toMatch(/different/);
+    expect(buildOperation("split_column", { ...f, splitNames: ["a", ""] }).error).toMatch(/name/);
+  });
+
+  it("only offers text columns for splitting", () => {
+    expect(columnRestriction("split_column", DEFAULT_FORM, col("n", "integer", false))).toBe("Not text");
+  });
+
+  it("needs two columns and a name to merge", () => {
+    expect(buildOperation("merge_columns", { ...DEFAULT_FORM, mergeColumns: ["a"] }).error).toMatch(/two/);
+    expect(buildOperation("merge_columns", { ...DEFAULT_FORM, mergeColumns: ["a", "b"] }).error).toMatch(/name/);
+    expect(buildOperation("merge_columns", { ...DEFAULT_FORM, mergeColumns: ["a", "b"], mergeName: " full " }).operation).toMatchObject({
+      type: "merge_columns",
+      new_name: "full",
+      keep_originals: true,
+    });
+  });
+
+  it("sends an upper-case country code for phones", () => {
+    const op = buildOperation("standardize_phone", { ...DEFAULT_FORM, phoneColumns: ["p"], phoneRegion: "gb" }).operation;
+    expect(op).toEqual({ type: "standardize_phone", columns: ["p"], region: "GB", format: "international", on_invalid: "keep" });
+  });
+
+  it("adds the region only to phone checks", () => {
+    const f = {
+      ...DEFAULT_FORM,
+      flagRegion: "us",
+      flagRules: [
+        { column: "p", check: "invalid_phone" as const },
+        { column: "e", check: "invalid_email" as const },
+      ],
+    };
+    expect(buildOperation("flag_rows", f).operation).toEqual({
+      type: "flag_rows",
+      rules: [
+        { column: "p", check: "invalid_phone", region: "US" },
+        { column: "e", check: "invalid_email" },
+      ],
+      column_name: "needs_review",
+    });
+    expect(buildOperation("flag_rows", DEFAULT_FORM).error).toMatch(/check/);
+  });
+});

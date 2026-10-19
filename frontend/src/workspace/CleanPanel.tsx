@@ -7,18 +7,23 @@ import {
   CheckCircle2,
   Copy,
   Eye,
+  Flag,
   History,
   Info,
+  Phone,
+  Plus,
   Replace,
+  Split,
   SquareDashed,
   TableProperties,
   Trash2,
   Type,
   Undo2,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { ApiError, SESSION_GONE, api } from "@/api/client";
-import type { ColumnProfile, Operation, OperationPreview, OutlierReport, Profile } from "@/api/types";
+import type { ColumnProfile, FlagRule, Operation, OperationPreview, OutlierReport, Profile } from "@/api/types";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
@@ -35,6 +40,8 @@ import {
   CATEGORIES,
   CHOICES,
   DEFAULT_FORM,
+  FLAG_CHECKS,
+  PHONE_REGIONS,
   buildOperation,
   categoryOf,
   columnRestriction,
@@ -58,6 +65,9 @@ const CATEGORY_ICONS: Record<CategoryId, LucideIcon> = {
   outliers: ArrowDownUp,
   empty: Trash2,
   replace: Replace,
+  split: Split,
+  phone: Phone,
+  flags: Flag,
 };
 
 const EXPLANATIONS: Record<CleanChoice, string> = {
@@ -70,9 +80,18 @@ const EXPLANATIONS: Record<CleanChoice, string> = {
   outliers: "Flags numbers far outside the typical range (IQR method). Review only — your data is never changed here.",
   remove_empty: "Removes rows and columns in which every cell is empty.",
   find_replace: "Replaces a specific value or piece of text in the columns you choose.",
+  split_column: "Splits one column into several new columns, for example a full name into first and last name.",
+  merge_columns: "Joins several columns into one new column, for example first and last name into a full name.",
+  standardize_phone: "Writes phone numbers from any country in one format and lists the ones that are not real numbers.",
+  flag_rows: "Marks rows that need a human decision in a new column, without changing or removing any data.",
 };
 
-const SHORT_LABELS: Partial<Record<CleanChoice, string>> = { trim_whitespace: "Trim spaces", standardize_text: "Change case" };
+const SHORT_LABELS: Partial<Record<CleanChoice, string>> = {
+  trim_whitespace: "Trim spaces",
+  standardize_text: "Change case",
+  split_column: "Split",
+  merge_columns: "Merge",
+};
 
 function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
   const steps = ["Configure", "Preview", "Apply"];
@@ -271,9 +290,224 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
         </div>
       );
 
+    case "split_column": {
+      const textCols = cols.filter((c) => c.is_text);
+      const setName = (i: number, v: string) => set({ splitNames: form.splitNames.map((n, j) => (j === i ? v : n)) });
+      return (
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="split-col">Column to split</Label>
+              <Select id="split-col" value={form.splitColumn} onChange={(e) => set({ splitColumn: e.target.value })}>
+                <option value="">Choose a text column…</option>
+                {textCols.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="split-sep">Split on</Label>
+              <Select
+                id="split-sep"
+                value={[" ", ",", "-", "/", "|", ";"].includes(form.splitSeparator) ? form.splitSeparator : "custom"}
+                onChange={(e) => set({ splitSeparator: e.target.value === "custom" ? "" : e.target.value })}
+              >
+                <option value=" ">Spaces</option>
+                <option value=",">Comma ( , )</option>
+                <option value="-">Dash ( - )</option>
+                <option value="/">Slash ( / )</option>
+                <option value="|">Pipe ( | )</option>
+                <option value=";">Semicolon ( ; )</option>
+                <option value="custom">Other text…</option>
+              </Select>
+              {![" ", ",", "-", "/", "|", ";"].includes(form.splitSeparator) && (
+                <Input aria-label="Custom separator" value={form.splitSeparator} maxLength={20} onChange={(e) => set({ splitSeparator: e.target.value })} placeholder="e.g. ' - '" />
+              )}
+            </div>
+          </div>
+          <fieldset className="space-y-2">
+            <legend className="mb-2 text-small font-medium text-slate-700">New column names</legend>
+            {form.splitNames.map((n, i) => (
+              <div key={i} className="flex gap-2">
+                <Input aria-label={`New column ${i + 1}`} value={n} maxLength={200} onChange={(e) => setName(i, e.target.value)} />
+                {form.splitNames.length > 2 && (
+                  <Button variant="ghost" size="icon" aria-label={`Remove column ${i + 1}`} onClick={() => set({ splitNames: form.splitNames.filter((_, j) => j !== i) })}>
+                    <X />
+                  </Button>
+                )}
+              </div>
+            ))}
+            {form.splitNames.length < 10 && (
+              <Button variant="link" size="sm" onClick={() => set({ splitNames: [...form.splitNames, `part_${form.splitNames.length + 1}`] })}>
+                <Plus /> Add another column
+              </Button>
+            )}
+          </fieldset>
+          <fieldset>
+            <legend className="mb-2 text-small font-medium text-slate-700">When there are more parts than columns</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <RadioCard name="split-from" value="start" checked={form.splitFrom === "start"} onChange={() => set({ splitFrom: "start" })} label="Extra text goes to the last column" description="“Ali Raza Khan” → “Ali” + “Raza Khan”" />
+              <RadioCard name="split-from" value="end" checked={form.splitFrom === "end"} onChange={() => set({ splitFrom: "end" })} label="Extra text goes to the first column" description="“Ali Raza Khan” → “Ali Raza” + “Khan”" />
+            </div>
+          </fieldset>
+          <Checkbox id="split-keep" checked={form.splitKeep} onChange={(e) => set({ splitKeep: e.target.checked })} label="Keep the original column" description="Untick to remove it after splitting." />
+        </div>
+      );
+    }
+
+    case "merge_columns":
+      return (
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="merge-name">New column name</Label>
+              <Input id="merge-name" value={form.mergeName} maxLength={200} onChange={(e) => set({ mergeName: e.target.value })} placeholder="e.g. full_name" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="merge-sep">Put between the values</Label>
+              <Input id="merge-sep" value={form.mergeSeparator} maxLength={20} onChange={(e) => set({ mergeSeparator: e.target.value })} placeholder="a space" />
+              <FieldHint>Empty values are skipped, so no double spaces appear.</FieldHint>
+            </div>
+          </div>
+          <ColumnPicker id="merge-cols" label="Columns, in the order they are joined" columns={cols} selected={form.mergeColumns} onChange={(mergeColumns) => set({ mergeColumns })} />
+          <Checkbox id="merge-keep" checked={form.mergeKeep} onChange={(e) => set({ mergeKeep: e.target.checked })} label="Keep the original columns" description="Untick to remove them after merging." />
+        </div>
+      );
+
+    case "standardize_phone":
+      return (
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="phone-region">Country of numbers without a + code</Label>
+              <Select id="phone-region" value={form.phoneRegion} onChange={(e) => set({ phoneRegion: e.target.value })}>
+                {PHONE_REGIONS.map((code) => (
+                  <option key={code} value={code}>
+                    {regionName(code)} ({code})
+                  </option>
+                ))}
+              </Select>
+              <FieldHint>Numbers that already start with + or 00 are read correctly for every country.</FieldHint>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="phone-format">Write numbers as</Label>
+              <Select id="phone-format" value={form.phoneFormat} onChange={(e) => set({ phoneFormat: e.target.value as FormState["phoneFormat"] })}>
+                <option value="international">International: +1 650-253-0000</option>
+                <option value="national">National: (650) 253-0000</option>
+                <option value="e164">E.164 (for CRMs and SMS tools): +16502530000</option>
+              </Select>
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <RadioCard name="phone-invalid" value="keep" checked={form.phoneOnInvalid === "keep"} onChange={() => set({ phoneOnInvalid: "keep" })} label="Leave invalid numbers as they are" description="They are listed so you can review or flag them." />
+            <RadioCard name="phone-invalid" value="set_missing" checked={form.phoneOnInvalid === "set_missing"} onChange={() => set({ phoneOnInvalid: "set_missing" })} label="Make invalid numbers empty" description="Use only when the client asked for it." />
+          </div>
+          <ColumnPicker id="phone-cols" columns={cols} selected={form.phoneColumns} onChange={(phoneColumns) => set({ phoneColumns })} />
+        </div>
+      );
+
+    case "flag_rows":
+      return <FlagRulesForm form={form} set={set} cols={cols} />;
+
     case "outliers":
       return null;
   }
+}
+
+const regionNames = (() => {
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" });
+  } catch {
+    return null;
+  }
+})();
+function regionName(code: string): string {
+  try {
+    return regionNames?.of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+function FlagRulesForm({ form, set, cols }: { form: FormState; set: (patch: Partial<FormState>) => void; cols: ColumnProfile[] }) {
+  const [column, setColumn] = useState("");
+  const [check, setCheck] = useState<FlagRule["check"]>("missing");
+  const exists = form.flagRules.some((r) => r.column === column && r.check === check);
+  const add = () => {
+    if (!column || exists) return;
+    set({ flagRules: [...form.flagRules, { column, check }] });
+  };
+  const usesPhone = form.flagRules.some((r) => r.check === "invalid_phone");
+  return (
+    <div className="space-y-4">
+      <p className="text-body text-muted-foreground">
+        Adds one column that explains why each row needs attention, for example “Missing phone; Invalid email in email”. Your data is not changed and nothing is removed.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+        <div className="space-y-1.5">
+          <Label htmlFor="flag-col">Column</Label>
+          <Select id="flag-col" value={column} onChange={(e) => setColumn(e.target.value)}>
+            <option value="">Choose a column…</option>
+            {cols.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="flag-check">Flag rows where</Label>
+          <Select id="flag-check" value={check} onChange={(e) => setCheck(e.target.value as FlagRule["check"])}>
+            {FLAG_CHECKS.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <Button variant="secondary" onClick={add} disabled={!column || exists}>
+          <Plus /> Add check
+        </Button>
+      </div>
+      {form.flagRules.length > 0 ? (
+        <ul className="divide-y divide-border rounded-md border border-border">
+          {form.flagRules.map((r, i) => (
+            <li key={`${r.column}-${r.check}`} className="flex items-center justify-between gap-2 px-3 py-2 text-small">
+              <span>
+                <strong className="font-medium">{r.column}</strong>: {FLAG_CHECKS.find((c) => c.value === r.check)!.label}
+              </span>
+              <Button variant="ghost" size="icon" aria-label={`Remove check ${r.column} ${r.check}`} onClick={() => set({ flagRules: form.flagRules.filter((_, j) => j !== i) })}>
+                <X />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-caption text-muted-foreground">No checks yet. Add one or more above.</p>
+      )}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="flag-name">Review column name</Label>
+          <Input id="flag-name" value={form.flagColumnName} maxLength={200} onChange={(e) => set({ flagColumnName: e.target.value })} />
+        </div>
+        {usesPhone && (
+          <div className="space-y-1.5">
+            <Label htmlFor="flag-region">Country of phone numbers without a + code</Label>
+            <Select id="flag-region" value={form.flagRegion} onChange={(e) => set({ flagRegion: e.target.value })}>
+              <option value="">None: only accept numbers with a + country code</option>
+              {PHONE_REGIONS.map((code) => (
+                <option key={code} value={code}>
+                  {regionName(code)} ({code})
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function OutlierReview({ profile, form, set }: { profile: Profile; form: FormState; set: (p: Partial<FormState>) => void }) {
@@ -475,7 +709,18 @@ export function CleanPanel() {
     if (!profile) return;
     const names = new Set(profile.columns.map((c) => c.name));
     const keep = (arr: string[]) => arr.filter((n) => names.has(n));
-    setForm((f) => ({ ...f, mvColumns: keep(f.mvColumns), trimColumns: keep(f.trimColumns), caseColumns: keep(f.caseColumns), convColumns: keep(f.convColumns), frColumns: keep(f.frColumns) }));
+    setForm((f) => ({
+      ...f,
+      mvColumns: keep(f.mvColumns),
+      trimColumns: keep(f.trimColumns),
+      caseColumns: keep(f.caseColumns),
+      convColumns: keep(f.convColumns),
+      frColumns: keep(f.frColumns),
+      mergeColumns: keep(f.mergeColumns),
+      phoneColumns: keep(f.phoneColumns),
+      splitColumn: names.has(f.splitColumn) ? f.splitColumn : "",
+      flagRules: f.flagRules.filter((r) => names.has(r.column)),
+    }));
   }, [profile]);
 
   const set = (patch: Partial<FormState>) => {

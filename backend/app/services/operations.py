@@ -29,23 +29,31 @@ from app.schemas.operations import (  # noqa: E402,F401
     CleanColumnNames,
     ConvertType,
     FindReplace,
+    FlagRows,
+    MergeColumns,
     MissingValues,
     Operation,
     RemoveDuplicates,
     RemoveEmpty,
+    SplitColumn,
+    StandardizePhone,
     StandardizeText,
     TrimWhitespace,
 )
 
 DESTRUCTIVE_TYPES = {"remove_duplicates", "remove_empty"}
 # Operation types that can remove rows or columns with at least one of their settings.
-DATA_LOSS_TYPES = DESTRUCTIVE_TYPES | {"missing_values"}
+DATA_LOSS_TYPES = DESTRUCTIVE_TYPES | {"missing_values", "split_column", "merge_columns"}
 
 
 def is_destructive(op: BaseModel) -> bool:
     """Operations that delete rows or columns need an explicit confirmation in the UI."""
     if op.type in DESTRUCTIVE_TYPES:
         return True
+    if op.type == "split_column":
+        return not op.keep_original
+    if op.type == "merge_columns":
+        return not op.keep_originals
     return op.type == "missing_values" and op.strategy in ("drop_rows", "drop_columns")
 
 
@@ -64,7 +72,8 @@ class OpResult:
 
     @property
     def changed(self) -> bool:
-        return bool(self.rows_removed or self.columns_removed or self.cells_changed or self.details.get("renamed"))
+        return bool(self.rows_removed or self.columns_removed or self.cells_changed or self.details.get("renamed")
+                    or self.details.get("added_columns"))
 
 
 # --------------------------------------------------------------------------- helpers
@@ -89,13 +98,15 @@ def count_changed_cells(before: pd.DataFrame, after: pd.DataFrame, rename: dict[
     total = 0
     samples: list[dict] = []
     for col in (columns if columns is not None else before.columns):
-        if col not in before.columns:
-            continue
         new_col = rename.get(col, col)
         if new_col not in after.columns:
             continue
-        b = before[col] if common_index is before.index else before.loc[common_index, col]
         a = after[new_col] if common_index is before.index else after.loc[common_index, new_col]
+        if col in before.columns:
+            b = before[col] if common_index is before.index else before.loc[common_index, col]
+        else:
+            # A column the operation added: every value in it is new.
+            b = pd.Series(pd.NA, index=a.index, dtype=STRING_DTYPE)
         bc, ac = _canon(b), _canon(a)
         both_na = bc.isna() & ac.isna()
         equal = (bc == ac).fillna(False).astype(bool)
@@ -441,6 +452,249 @@ def find_replace(df: pd.DataFrame, op: FindReplace) -> OpResult:
                     details={"touched": cols})
 
 
+def _blank_to_na(s: pd.Series) -> pd.Series:
+    s = s.astype(STRING_DTYPE).str.strip()
+    return s.mask((s == "").fillna(False).astype(bool), pd.NA)
+
+
+def _require_new_names(df: pd.DataFrame, names: list[str]) -> None:
+    taken = [n for n in names if n in df.columns]
+    if taken:
+        raise AppError("column_exists", f"Column(s) already exist: {', '.join(taken)}.",
+                       "Choose names that are not used yet. To replace the original column instead, "
+                       "untick \"Keep the original\" and reuse its name.")
+
+
+def _split_parts(text: pd.Series, separator: str, k: int, from_end: bool) -> list[pd.Series]:
+    """Split each value into at most k parts. With from_end the extra text stays in the FIRST
+    part ("Ali Raza Khan" -> "Ali Raza" + "Khan"); otherwise in the LAST part."""
+    columns: list[list] = [[] for _ in range(k)]
+    for value in text.tolist():
+        if not isinstance(value, str):
+            pieces: list = []
+        elif separator == " ":
+            pieces = value.rsplit(None, k - 1) if from_end else value.split(None, k - 1)
+        else:
+            pieces = value.rsplit(separator, k - 1) if from_end else value.split(separator, k - 1)
+        if from_end and len(pieces) < k:
+            pieces = [None] * (k - len(pieces)) + pieces  # fewer parts: fill from the right
+        for i in range(k):
+            columns[i].append(pieces[i] if i < len(pieces) else None)
+    return [_blank_to_na(pd.Series(col, index=text.index, dtype=STRING_DTYPE)) for col in columns]
+
+
+def split_column(df: pd.DataFrame, op: SplitColumn) -> OpResult:
+    col = _require_columns(df, [op.column])[0]
+    _require_text(df, [col], "Splitting")
+    # When the original is removed, its name may be reused for one of the new columns.
+    _require_new_names(df, [n for n in op.names if op.keep_original or n != col])
+    k = len(op.names)
+    text = df[col].str.strip()
+    parts = _split_parts(text, op.separator, k, op.split_from == "end")
+    out = df.copy(deep=False)
+    position = list(df.columns).index(col)
+    removed: list[str] = []
+    if op.keep_original:
+        position += 1
+    else:
+        out = out.drop(columns=[col])
+        removed = [] if col in op.names else [col]  # a reused name is replaced, not removed
+    for i, name in enumerate(op.names):
+        out.insert(position + i, name, parts[i])
+    filled_cells = int(sum(int(p.notna().sum()) for p in parts))
+    sep_label = "spaces" if op.separator == " " else f'"{op.separator}"'
+    summary = f'Split "{col}" on {sep_label} into {_plural(k, "column")}: {", ".join(op.names)}.'
+    if not op.keep_original:
+        summary += f' Replaced the original "{col}" column.' if col in op.names else f' Removed the original "{col}" column.'
+    warnings = []
+    single = sum(1 for p in zip(*[x.notna().tolist() for x in parts]) if sum(p) == 1)
+    if single:
+        target = op.names[-1] if op.split_from == "end" else op.names[0]
+        warnings.append(f'{_plural(single, "value")} in "{col}" had nothing to split, so only "{target}" was filled.')
+    return OpResult(out, summary, cells_changed=filled_cells, columns_removed=len(removed), warnings=warnings,
+                    details={"added_columns": list(op.names), "removed_columns": removed, "touched": list(op.names)})
+
+
+def merge_columns(df: pd.DataFrame, op: MergeColumns) -> OpResult:
+    cols = _require_columns(df, op.columns)
+    if len(cols) < 2:
+        raise AppError("no_columns", "Select at least two different columns to merge.", None)
+    # When the originals are removed, one of their names may be reused for the new column.
+    if op.keep_originals or op.new_name not in cols:
+        _require_new_names(df, [op.new_name])
+    merged = _blank_to_na(_canon(df[cols[0]]))
+    for c in cols[1:]:
+        part = _blank_to_na(_canon(df[c]))
+        both = merged.notna() & part.notna()
+        joined = (merged + op.separator + part).where(both)
+        merged = joined.fillna(merged).fillna(part).astype(STRING_DTYPE)
+    out = df.copy(deep=False)
+    last = max(list(df.columns).index(c) for c in cols)
+    removed: list[str] = []
+    if op.keep_originals:
+        position = last + 1
+    else:
+        # The new column takes the place of the last merged column.
+        position = sum(1 for i, c in enumerate(df.columns) if i < last and c not in cols)
+        out = out.drop(columns=cols)
+        removed = [c for c in cols if c != op.new_name]  # a reused name is replaced, not removed
+    out.insert(position, op.new_name, merged)
+    filled = int(merged.notna().sum())
+    summary = f'Merged {", ".join(cols)} into "{op.new_name}".'
+    if removed:
+        summary += f" Removed the {_plural(len(removed), 'original column')}."
+    return OpResult(out, summary, cells_changed=filled, columns_removed=len(removed),
+                    details={"added_columns": [op.new_name], "removed_columns": removed, "touched": [op.new_name]})
+
+
+# --------------------------------------------------------------------------- phone numbers
+
+def _phonenumbers():
+    try:
+        import phonenumbers
+    except ImportError as exc:  # pragma: no cover - depends on the installation
+        raise AppError("missing_dependency", "Phone number support is not installed on the server.",
+                       "Run: pip install -r requirements.txt", status=500) from exc
+    return phonenumbers
+
+
+def _check_region(region: str) -> str:
+    pn = _phonenumbers()
+    if region not in pn.SUPPORTED_REGIONS:
+        raise AppError("unknown_region", f'"{region}" is not a supported country code.',
+                       "Use a two-letter country code such as US, GB, DE, IN or PK.")
+    return region
+
+
+def _phone_text(s: pd.Series) -> pd.Series:
+    """Text form of phone values; numbers that came from Excel as 4155552671.0 lose the .0."""
+    text = _canon(s).str.strip()
+    if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+        text = text.str.replace(r"\.0+$", "", regex=True)
+    return text
+
+
+def parse_phone(value: str, region: str | None):
+    """A valid parsed phone number, or None. Without a region only +country numbers can be valid."""
+    pn = _phonenumbers()
+    try:
+        number = pn.parse(value, region)
+    except pn.NumberParseException:
+        return None
+    return number if pn.is_valid_number(number) else None
+
+
+def standardize_phone(df: pd.DataFrame, op: StandardizePhone) -> OpResult:
+    cols = _require_columns(df, op.columns)
+    pn = _phonenumbers()
+    region = _check_region(op.region)
+    fmt = {"national": pn.PhoneNumberFormat.NATIONAL, "international": pn.PhoneNumberFormat.INTERNATIONAL,
+           "e164": pn.PhoneNumberFormat.E164}[op.format]
+    out = df.copy(deep=False)
+    invalid_counts: dict[str, int] = {}
+    invalid_samples: list[dict] = []
+    for c in cols:
+        text = _phone_text(df[c])
+        cache: dict[str, str | None] = {}
+        for value in text.dropna().unique():
+            number = parse_phone(value, region)
+            cache[value] = pn.format_number(number, fmt) if number is not None else None
+        formatted = pd.Series([cache.get(v) if isinstance(v, str) else None for v in text.tolist()],
+                              index=text.index, dtype=STRING_DTYPE)
+        bad = (text.notna() & formatted.isna()).fillna(False).astype(bool)
+        if bad.any():
+            invalid_counts[c] = int(bad.sum())
+            for idx in bad[bad].index[: max(0, 20 - len(invalid_samples))]:
+                invalid_samples.append({"row": int(idx) + 1, "column": c, "value": to_jsonable(df[c].loc[idx])})
+        fallback = text if op.on_invalid == "keep" else pd.Series(pd.NA, index=text.index, dtype=STRING_DTYPE)
+        out[c] = formatted.where(~bad, fallback).astype(STRING_DTYPE)
+    changed, _ = count_changed_cells(df, out, columns=cols)
+    total_bad = sum(invalid_counts.values())
+    label = {"national": "national", "international": "international", "e164": "E.164"}[op.format]
+    summary = (f"Formatted {_plural(changed, 'phone number')} in {label} format." if changed
+               else "All valid phone numbers are already in this format.")
+    warnings = []
+    if total_bad:
+        action = "left unchanged" if op.on_invalid == "keep" else "set to missing"
+        warnings.append(f"{_plural(total_bad, 'value')} could not be read as a valid phone number for {region} and "
+                        f"{'was' if total_bad == 1 else 'were'} {action}. Use 'Flag rows' to mark them for review.")
+    return OpResult(out, summary, cells_changed=changed, warnings=warnings,
+                    details={"invalid_counts": invalid_counts, "invalid_samples": invalid_samples, "touched": cols})
+
+
+# --------------------------------------------------------------------------- review flags
+
+EMAIL_RE = r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}"
+FLAG_LABELS = {
+    "missing": "Missing {col}",
+    "invalid_email": "Invalid email in {col}",
+    "invalid_phone": "Invalid phone in {col}",
+    "not_number": "Not a number in {col}",
+    "not_date": "Not a date in {col}",
+    "duplicate_value": "Repeated {col}",
+}
+
+
+def _flag_mask(df: pd.DataFrame, rule) -> pd.Series:
+    s = df[rule.column]
+    present = s.notna()
+    if rule.check == "missing":
+        return ~present
+    if rule.check == "invalid_email":
+        text = _canon(s).str.strip()
+        return present & ~text.str.fullmatch(EMAIL_RE).fillna(False).astype(bool)
+    if rule.check == "invalid_phone":
+        region = _check_region(rule.region) if rule.region else None
+        text = _phone_text(s)
+        valid = {v: parse_phone(v, region) is not None for v in text.dropna().unique()}
+        return present & pd.Series([valid.get(v, False) if isinstance(v, str) else False for v in text.tolist()],
+                                   index=s.index, dtype=bool).__invert__()
+    if rule.check == "not_number":
+        if is_numeric_type(logical_type(s)):
+            return pd.Series(False, index=s.index)
+        return present & numeric_view(s).isna()
+    if rule.check == "not_date":
+        if pd.api.types.is_datetime64_any_dtype(s):
+            return pd.Series(False, index=s.index)
+        parsed = pd.to_datetime(_canon(s).str.strip(), errors="coerce", format="mixed")
+        return present & parsed.isna()
+    # duplicate_value: the same value (ignoring case and outer spaces) appears in more than one row
+    key = _canon(s).str.strip().str.lower()
+    return present & key.duplicated(keep=False).fillna(False).astype(bool)
+
+
+def flag_rows(df: pd.DataFrame, op: FlagRows) -> OpResult:
+    _require_columns(df, [r.column for r in op.rules])
+    name = op.column_name
+    if name in {r.column for r in op.rules}:
+        raise AppError("column_exists", f'"{name}" is one of the columns being checked.',
+                       "Choose another name for the review column.")
+    flag = pd.Series(pd.NA, index=df.index, dtype=STRING_DTYPE)
+    counts = []
+    for rule in op.rules:
+        mask = _flag_mask(df, rule).fillna(False).astype(bool)
+        label = FLAG_LABELS[rule.check].format(col=rule.column)
+        with_label = (flag + "; " + label).fillna(label)
+        flag = flag.where(~mask, with_label)
+        counts.append({"column": rule.column, "check": rule.check, "rows": int(mask.sum())})
+    flagged = int(flag.notna().sum())
+    if not flagged:
+        return OpResult(df.copy(deep=False), "No rows match the selected checks, so no review column was added.",
+                        details={"rule_counts": counts})
+    out = df.copy(deep=False)
+    warnings = []
+    added: list[str] = []
+    if name in df.columns:
+        warnings.append(f'The existing "{name}" column will be replaced with the new review notes.')
+    else:
+        added = [name]
+    out[name] = flag
+    changed, _ = count_changed_cells(df, out, columns=[name])
+    summary = f'Flagged {_plural(flagged, "row")} for review in "{name}". No values were changed or removed.'
+    return OpResult(out, summary, cells_changed=changed, warnings=warnings,
+                    details={"added_columns": added, "rule_counts": counts, "touched": [name]})
+
+
 HANDLERS = {
     "remove_duplicates": remove_duplicates,
     "missing_values": missing_values,
@@ -450,6 +704,10 @@ HANDLERS = {
     "convert_type": convert_type,
     "remove_empty": remove_empty,
     "find_replace": find_replace,
+    "split_column": split_column,
+    "merge_columns": merge_columns,
+    "standardize_phone": standardize_phone,
+    "flag_rows": flag_rows,
 }
 
 LABELS = {
@@ -461,6 +719,10 @@ LABELS = {
     "convert_type": "Convert data type",
     "remove_empty": "Remove empty rows/columns",
     "find_replace": "Find and replace",
+    "split_column": "Split column",
+    "merge_columns": "Merge columns",
+    "standardize_phone": "Standardize phone numbers",
+    "flag_rows": "Flag rows for review",
 }
 
 

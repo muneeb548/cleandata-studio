@@ -409,8 +409,15 @@ def _changed_mask(session: Session) -> pd.Series:
         removed = ~original.index.isin(current.index)
         mask = pd.Series(removed, index=original.index)
         common = original.index.intersection(current.index)
+        # Original columns that no longer exist under their old name (renamed or removed).
+        gone = [_canon(original.loc[common, c]) for c in original.columns if c not in current.columns]
         for col in current.columns:
             if col not in original.columns:
+                values = _canon(current.loc[common, col])
+                if any(bool(((old.isna() & values.isna()) | (old == values).fillna(False)).all()) for old in gone):
+                    continue  # a renamed column whose values did not change
+                # A column added by an operation (split, merge, review flags): rows with a value changed.
+                mask.loc[common] |= current.loc[common, col].notna().to_numpy()
                 continue
             b, a = _canon(original.loc[common, col]), _canon(current.loc[common, col])
             diff = ~((b.isna() & a.isna()) | (b == a).fillna(False).astype(bool))

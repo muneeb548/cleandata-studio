@@ -112,6 +112,113 @@ class FindReplace(_Op):
     case_sensitive: bool = True
 
 
+NewColumnName = Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+def _clean_new_name(value: str) -> str:
+    name = value.strip()
+    if not name:
+        raise ValueError("a new column name cannot be empty")
+    return name
+
+
+class SplitColumn(_Op):
+    """Split one text column into several new columns, e.g. a full name into first and last name."""
+
+    type: Literal["split_column"]
+    column: ColumnName
+    separator: Annotated[str, StringConstraints(min_length=1, max_length=20)] = Field(
+        " ", description='Text between the parts. " " (a space) splits on any run of spaces.'
+    )
+    names: Annotated[list[NewColumnName], Field(min_length=2, max_length=10)] = Field(
+        description="Names of the new columns, in order. The last one receives any remaining text."
+    )
+    split_from: Literal["start", "end"] = Field(
+        "start", description='start: "Ali Raza Khan" -> "Ali" + "Raza Khan"; end: -> "Ali Raza" + "Khan".'
+    )
+    keep_original: bool = True
+
+    @field_validator("names")
+    @classmethod
+    def _check_names(cls, value: list[str]) -> list[str]:
+        names = [_clean_new_name(v) for v in value]
+        if len(set(names)) != len(names):
+            raise ValueError("the new column names must be different from each other")
+        return names
+
+
+class MergeColumns(_Op):
+    """Join several columns into one new column, e.g. first and last name into a full name."""
+
+    type: Literal["merge_columns"]
+    columns: Annotated[list[ColumnName], Field(min_length=2, max_length=20)]
+    separator: Annotated[str, StringConstraints(max_length=20)] = " "
+    new_name: NewColumnName
+    keep_originals: bool = True
+
+    @field_validator("new_name")
+    @classmethod
+    def _check_name(cls, value: str) -> str:
+        return _clean_new_name(value)
+
+
+RegionCode = Annotated[str, StringConstraints(pattern=r"^[A-Za-z]{2}$")]
+
+
+def _upper_region(value: str | None) -> str | None:
+    return value.upper() if value else value
+
+
+class StandardizePhone(_Op):
+    """Write phone numbers from any country in one consistent format and report the ones that are not valid."""
+
+    type: Literal["standardize_phone"]
+    columns: ColumnList = Field(default_factory=list)
+    region: RegionCode = Field(
+        "US", description="Two-letter country code (US, GB, DE, PK...) used for numbers written without a + country code."
+    )
+    format: Literal["national", "international", "e164"] = Field(
+        "international",
+        description="national: (415) 555-2671, international: +1 415-555-2671, e164: +14155552671.",
+    )
+    on_invalid: Literal["keep", "set_missing"] = Field(
+        "keep", description="keep: leave values that are not valid numbers unchanged (they are reported)."
+    )
+
+    @field_validator("region")
+    @classmethod
+    def _check_region(cls, value: str | None) -> str | None:
+        return _upper_region(value)
+
+
+class FlagRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    column: ColumnName
+    check: Literal["missing", "invalid_email", "invalid_phone", "not_number", "not_date", "duplicate_value"]
+    region: RegionCode | None = Field(
+        None, description="invalid_phone only: country for numbers written without a + country code."
+    )
+
+    @field_validator("region")
+    @classmethod
+    def _check_region(cls, value: str | None) -> str | None:
+        return _upper_region(value)
+
+
+class FlagRows(_Op):
+    """Add a review column that says why each row needs attention. No data is changed or removed."""
+
+    type: Literal["flag_rows"]
+    rules: Annotated[list[FlagRule], Field(min_length=1, max_length=50)]
+    column_name: NewColumnName = "needs_review"
+
+    @field_validator("column_name")
+    @classmethod
+    def _check_name(cls, value: str) -> str:
+        return _clean_new_name(value)
+
+
 Operation = Annotated[
     Union[
         RemoveDuplicates,
@@ -122,13 +229,18 @@ Operation = Annotated[
         ConvertType,
         RemoveEmpty,
         FindReplace,
+        SplitColumn,
+        MergeColumns,
+        StandardizePhone,
+        FlagRows,
     ],
     Field(discriminator="type"),
 ]
 
 OPERATION_MODELS: dict[str, type[_Op]] = {
     m.model_fields["type"].annotation.__args__[0]: m  # type: ignore[union-attr]
-    for m in (RemoveDuplicates, MissingValues, TrimWhitespace, StandardizeText, CleanColumnNames, ConvertType, RemoveEmpty, FindReplace)
+    for m in (RemoveDuplicates, MissingValues, TrimWhitespace, StandardizeText, CleanColumnNames, ConvertType, RemoveEmpty,
+              FindReplace, SplitColumn, MergeColumns, StandardizePhone, FlagRows)
 }
 
 

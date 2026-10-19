@@ -143,7 +143,14 @@ export type OperationType =
   | "clean_column_names"
   | "convert_type"
   | "remove_empty"
-  | "find_replace";
+  | "find_replace"
+  | "split_column"
+  | "merge_columns"
+  | "standardize_phone"
+  | "flag_rows";
+
+export type FlagCheck = "missing" | "invalid_email" | "invalid_phone" | "not_number" | "not_date" | "duplicate_value";
+export type FlagRule = { column: string; check: FlagCheck; region?: string | null };
 
 export type Operation =
   | { type: "remove_duplicates"; keep: "first" | "last" }
@@ -172,7 +179,24 @@ export type Operation =
       replace: string;
       match: "exact" | "contains";
       case_sensitive: boolean;
-    };
+    }
+  | {
+      type: "split_column";
+      column: string;
+      separator: string;
+      names: string[];
+      split_from: "start" | "end";
+      keep_original: boolean;
+    }
+  | { type: "merge_columns"; columns: string[]; separator: string; new_name: string; keep_originals: boolean }
+  | {
+      type: "standardize_phone";
+      columns: string[];
+      region: string;
+      format: "national" | "international" | "e164";
+      on_invalid: "keep" | "set_missing";
+    }
+  | { type: "flag_rows"; rules: FlagRule[]; column_name: string };
 
 export interface CellChange {
   row: number;

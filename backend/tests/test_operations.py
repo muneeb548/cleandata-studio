@@ -17,6 +17,10 @@ def run(df, **params):
         "convert_type": ops.ConvertType,
         "remove_empty": ops.RemoveEmpty,
         "find_replace": ops.FindReplace,
+        "split_column": ops.SplitColumn,
+        "merge_columns": ops.MergeColumns,
+        "standardize_phone": ops.StandardizePhone,
+        "flag_rows": ops.FlagRows,
     }[params["type"]]
     return ops.run_operation(df, model(**params))
 
