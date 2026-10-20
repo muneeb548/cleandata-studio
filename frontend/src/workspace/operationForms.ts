@@ -367,6 +367,23 @@ export function formForIssue(choice: CleanChoice, column: string | null | undefi
     case "outliers":
       f.outlierColumn = column ?? "";
       break;
+    case "clean_email":
+      f.emailColumns = one;
+      break;
+    case "standardize_phone": {
+      f.phoneColumns = one;
+      // Mixed countries are best read from a country column when the file has one.
+      const country = columns.find((c) => /countr|nation/i.test(c.name) && c.name !== column);
+      f.phoneRegionSource = country ? "column" : "fixed";
+      f.phoneRegionColumn = country?.name ?? "";
+      break;
+    }
+    case "standardize_country":
+      f.countryColumns = one;
+      break;
+    case "clean_numbers":
+      f.numColumns = one;
+      break;
   }
   return f;
 }

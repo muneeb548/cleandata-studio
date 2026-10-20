@@ -314,6 +314,16 @@ class ChangeReport(_Model):
     message: str = Field(description="A ready-to-send summary for the client.")
 
 
+class Recipe(_Model):
+    app: Literal["CleanData Studio"]
+    kind: Literal["cleaning-recipe"]
+    version: int
+    name: str
+    source_file: str
+    created_at: str
+    steps: list[dict[str, Any]] = Field(description="Operations in the order they were applied.")
+
+
 class ValueCount(_Model):
     value: str
     count: int

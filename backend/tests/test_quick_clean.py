@@ -115,3 +115,29 @@ def test_change_report_message(session):
     assert "Removed 1 duplicate row" in report["message"]
     assert len(report["steps"]) == len(session.history)
     assert report["message"].startswith("Hi!")
+
+
+def test_excel_export_can_include_the_report_sheet(session):
+    import os
+
+    from openpyxl import load_workbook
+
+    plan = workspace.quick_clean_plan(session)
+    chosen = [OP.validate_python(s["operation"]) for s in plan["steps"] if s["selected"]]
+    workspace.apply_quick_clean(session, chosen, workspace.preview_quick_clean(session, chosen)["preview_token"])
+    path, name, _ = workspace.export_file(session, "out", "xlsx", include_report=True)
+    try:
+        wb = load_workbook(path, read_only=True)
+        assert wb.sheetnames == ["Cleaned data", "Cleaning report"]
+        lines = [row[0] for row in wb["Cleaning report"].iter_rows(values_only=True)]
+        assert lines[0].startswith("Hi!") and any("duplicate row" in (line or "") for line in lines)
+        wb.close()
+    finally:
+        os.remove(path)
+    plain, _, _ = workspace.export_file(session, "out", "xlsx")
+    try:
+        wb = load_workbook(plain, read_only=True)
+        assert wb.sheetnames == ["Cleaned data"]  # the report sheet is only added when asked for
+        wb.close()
+    finally:
+        os.remove(plain)

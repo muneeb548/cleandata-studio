@@ -34,11 +34,12 @@ def escape_formulas(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def write_export(df: pd.DataFrame, path: str, fmt: str, *, bom: bool = False, protect_formulas: bool = False) -> None:
+def write_export(df: pd.DataFrame, path: str, fmt: str, *, bom: bool = False, protect_formulas: bool = False,
+                 report_lines: list[str] | None = None) -> None:
     if fmt == "csv":
         write_csv(escape_formulas(df) if protect_formulas else df, path, bom=bom)
     elif fmt == "xlsx":
-        write_xlsx(df, path)
+        write_xlsx(df, path, report_lines=report_lines)
     else:  # pragma: no cover - validated by the caller
         raise AppError("invalid_format", f'Cannot export as "{fmt}".', None)
 
@@ -63,7 +64,8 @@ def _python_values(col: pd.Series) -> list:
     return out.where(col.notna(), None).tolist()
 
 
-def write_xlsx(df: pd.DataFrame, path: str) -> None:
+def write_xlsx(df: pd.DataFrame, path: str, *, report_lines: list[str] | None = None) -> None:
+    """The data on a "Cleaned data" sheet, plus an optional "Cleaning report" sheet for the client."""
     try:
         from openpyxl import Workbook
         from openpyxl.cell import WriteOnlyCell
@@ -115,4 +117,10 @@ def write_xlsx(df: pd.DataFrame, path: str) -> None:
         except Exception:
             pass
         raise
+    if report_lines:
+        report = wb.create_sheet("Cleaning report")
+        for line in report_lines:
+            cell = WriteOnlyCell(report, value=_ILLEGAL_XML.sub("", line)[:EXCEL_MAX_CELL_CHARS])
+            cell.data_type = "s"  # always text, never a formula
+            report.append([cell])
     wb.save(path)

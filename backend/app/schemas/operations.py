@@ -346,5 +346,5 @@ class QuickCleanRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    operations: Annotated[list[Operation], Field(min_length=1, max_length=30)]
+    operations: Annotated[list[Operation], Field(min_length=1, max_length=100)]
     preview_token: Annotated[str, StringConstraints(max_length=128)] | None = None

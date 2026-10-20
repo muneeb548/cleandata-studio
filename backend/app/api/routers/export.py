@@ -34,9 +34,10 @@ def export(
     format: Literal["csv", "xlsx"] = "csv",
     bom: Annotated[bool, Query(description="CSV only: add a UTF-8 BOM for Excel.")] = False,
     protect_formulas: Annotated[bool, Query(description="CSV only: prefix text starting with = + - @ with an apostrophe so spreadsheets don't run it.")] = False,
+    include_report: Annotated[bool, Query(description="Excel only: add a \"Cleaning report\" sheet describing every change.")] = False,
 ) -> FileResponse:
     """Generated from the current working data (never the original upload unless nothing was changed)."""
-    path, name, media_type = workspace.export_file(session, filename, format, bom, protect_formulas)
+    path, name, media_type = workspace.export_file(session, filename, format, bom, protect_formulas, include_report)
     ascii_name = name.encode("ascii", "ignore").decode() or f"cleaned_data.{format}"
     disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
     return FileResponse(path, media_type=media_type, headers={"Content-Disposition": disposition},

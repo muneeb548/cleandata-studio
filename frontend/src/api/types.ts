@@ -187,6 +187,16 @@ export interface QuickCleanResult {
   session: SessionInfo;
 }
 
+export interface Recipe {
+  app: "CleanData Studio";
+  kind: "cleaning-recipe";
+  version: number;
+  name: string;
+  source_file: string;
+  created_at: string;
+  steps: Operation[];
+}
+
 export interface ChangeReport {
   file: string;
   rows_before: number;

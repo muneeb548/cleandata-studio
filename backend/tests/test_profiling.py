@@ -149,3 +149,50 @@ def test_ambiguous_dates_give_no_hint(frame):
 def test_ordinal_suffixes_count_as_one_format():
     s = pd.Series(["Mar 3rd 2026", "Mar 15th 2026", "Mar 1 2026"])
     assert profiling.date_format_summary(s)["formats"] == 1
+
+
+# --------------------------------------------------------------- contact details and amounts
+
+CONTACTS = (
+    "email,phone,country,amount\n"
+    '" ALI@Gmail.com ",(650) 253-0000,USA,"$1,250.00"\n'
+    "sara@example,0300-1234567,Pakistan,\"Rs 1,25,000\"\n"
+    "omar@gmail.com,+44 20 7031 3000,U.K.,99.50\n"
+    "zoya@gmail.com,650.253.0000,United States,\"1.234,56 €\"\n"
+)
+
+
+def test_email_issue_counts_untidy_and_invalid(frame):
+    issue = _issue(frame(CONTACTS), "emails:email")
+    assert issue["suggested_operation"] == "clean_email" and issue["severity"] == "medium"
+    assert issue["count"] == 2 and issue["example"] == "sara@example"
+    assert "1 address with capitals" in issue["description"]
+
+
+def test_tidy_emails_raise_no_issue(frame):
+    assert _issue(frame("email\na@b.com\nc@d.org\n"), "emails:email") is None
+
+
+def test_phone_layouts_issue(frame):
+    issue = _issue(frame(CONTACTS), "phones:phone")
+    assert issue["suggested_operation"] == "standardize_phone" and issue["count"] == 4
+
+
+def test_international_phones_from_different_countries_are_fine(frame):
+    df = frame("phone\n+1 650-253-0000\n+44 20 7031 3000\n+92 300 1234567\n")
+    assert _issue(df, "phones:phone") is None
+
+
+def test_country_names_issue(frame):
+    issue = _issue(frame(CONTACTS), "countries:country")
+    assert issue["suggested_operation"] == "standardize_country"
+    assert issue["count"] == 2  # USA and U.K.; "Pakistan" and "United States" are already full names
+
+
+def test_amounts_stored_as_text(frame):
+    issue = _issue(frame(CONTACTS), "amounts:amount")
+    assert issue["suggested_operation"] == "clean_numbers" and issue["example"] == "$1,250.00"
+
+
+def test_plain_words_are_not_amounts(frame):
+    assert _issue(frame("city\nLahore\nKarachi\nLondon\n"), "amounts:city") is None

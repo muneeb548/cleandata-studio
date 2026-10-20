@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/toast";
 import { formatNumber, suggestedOutputName } from "@/lib/utils";
 import { KeyValue } from "./shared";
 import { ChangeReportCard } from "./QuickClean";
+import { RecipeCard } from "./Recipes";
 import { useWorkspace } from "./WorkspaceContext";
 
 export function ExportPanel() {
@@ -20,6 +21,7 @@ export function ExportPanel() {
   const [name, setName] = useState("");
   const [bom, setBom] = useState(false);
   const [protectFormulas, setProtectFormulas] = useState(false);
+  const [includeReport, setIncludeReport] = useState(true);
   const [format, setFormat] = useState<ExportFormat>("csv");
   const [busy, setBusy] = useState(false);
   const [downloadError, setDownloadError] = useState<ApiError | null>(null);
@@ -39,7 +41,7 @@ export function ExportPanel() {
     setBusy(true);
     setDownloadError(null);
     try {
-      const saved = await api.exportFile(name, format, bom, protectFormulas);
+      const saved = await api.exportFile(name, format, bom, protectFormulas, includeReport && history.length > 0);
       toast({ tone: "success", title: "Download ready", description: `${saved} was generated from the current working data.` });
     } catch (err) {
       const e = toApiError(err);
@@ -122,6 +124,15 @@ export function ExportPanel() {
             </div>
             <FieldHint>Unsupported characters are replaced with underscores.</FieldHint>
           </div>
+          {format === "xlsx" && history.length > 0 && (
+            <Checkbox
+              id="include-report"
+              checked={includeReport}
+              onChange={(e) => setIncludeReport(e.target.checked)}
+              label="Add a “Cleaning report” sheet"
+              description="A second sheet that lists every change and what is left for review, ready for your client."
+            />
+          )}
           {format === "csv" && (
             <Checkbox
               id="bom"
@@ -152,7 +163,10 @@ export function ExportPanel() {
       </Card>
       </div>
 
-      <ChangeReportCard />
+      <div className="grid items-start gap-5 lg:grid-cols-2">
+        <ChangeReportCard />
+        <RecipeCard />
+      </div>
     </div>
   );
 }

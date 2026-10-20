@@ -191,3 +191,21 @@ describe("near-duplicates", () => {
     });
   });
 });
+
+describe("Fix buttons for contact details and amounts", () => {
+  const cols = [col("email", "text"), col("phone", "text"), col("country", "text"), col("amount", "text")];
+
+  it("pre-selects the column of the issue", () => {
+    expect(formForIssue("clean_email", "email", "emails:email", cols, DEFAULT_FORM).emailColumns).toEqual(["email"]);
+    expect(formForIssue("standardize_country", "country", "countries:country", cols, DEFAULT_FORM).countryColumns).toEqual(["country"]);
+    expect(formForIssue("clean_numbers", "amount", "amounts:amount", cols, DEFAULT_FORM).numColumns).toEqual(["amount"]);
+  });
+
+  it("reads phone countries from a country column when there is one", () => {
+    const f = formForIssue("standardize_phone", "phone", "phones:phone", cols, DEFAULT_FORM);
+    expect(f.phoneColumns).toEqual(["phone"]);
+    expect(f.phoneRegionSource).toBe("column");
+    expect(f.phoneRegionColumn).toBe("country");
+    expect(formForIssue("standardize_phone", "phone", "phones:phone", [col("phone", "text")], DEFAULT_FORM).phoneRegionSource).toBe("fixed");
+  });
+});

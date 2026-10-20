@@ -210,8 +210,94 @@ def date_format_summary(text: pd.Series) -> dict:
     return {"formats": len(examples), "examples": list(examples.values()), "hint": hint}
 
 
+_EMAIL_NAME_RE = re.compile(r"e-?mail", re.IGNORECASE)
+_PHONE_NAME_RE = re.compile(r"phone|mobile|cell|tel\b|telephone|whatsapp|contact.?no", re.IGNORECASE)
+_COUNTRY_NAME_RE = re.compile(r"country|nation", re.IGNORECASE)
+_EMAIL_SHAPE = r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}"
+MAX_CHECKED_VALUES = 5000
+
+
+def _sample_unique(stripped: pd.Series) -> list[str]:
+    values = stripped[stripped != ""].drop_duplicates()
+    return values.head(MAX_CHECKED_VALUES).tolist()
+
+
+def _contact_and_amount_issues(col: str, text: pd.Series, stripped: pd.Series, add, *, mostly_numeric: bool) -> None:
+    """Emails, phone numbers, country names and amounts written as text: each with a Fix."""
+    from app.services.operations import parse_amount  # local import: operations imports this module
+
+    present = stripped[stripped != ""]
+    if not len(present):
+        return
+
+    # Emails: untidy (capitals, spaces, mailto:) or impossible (ali@gmail, ali@@gmail.com)
+    without_mailto = present.str.replace(r"^mailto:", "", regex=True, case=False)
+    looks_valid = without_mailto.str.fullmatch(_EMAIL_SHAPE).fillna(False).astype(bool)
+    if _EMAIL_NAME_RE.search(col) or float(looks_valid.mean()) >= 0.8:
+        original = text[stripped != ""]
+        untidy = int(((original != without_mailto.str.lower()) & looks_valid).sum())
+        invalid = present[~looks_valid]
+        if untidy or len(invalid):
+            parts = []
+            if untidy:
+                parts.append(f"{_n(untidy, 'address')} with capitals, spaces or \"mailto:\"")
+            if len(invalid):
+                parts.append(f'{_n(len(invalid), "value")} that cannot be a real address (e.g. "{invalid.iloc[0]}")')
+            add(f"emails:{col}", "medium" if len(invalid) else "low", f'Email addresses need cleanup in "{col}"',
+                " and ".join(parts) + ".", column=col, count=untidy + len(invalid), operation="clean_email",
+                example=str(invalid.iloc[0]) if len(invalid) else None)
+        return
+
+    # Phone numbers: the same kind of number written in several layouts
+    if _PHONE_NAME_RE.search(col):
+        layouts: dict[str, str] = {}
+        without_code = 0
+        for value in _sample_unique(stripped):
+            if sum(ch.isdigit() for ch in value) >= 7:
+                layouts.setdefault(re.sub(r"\d", "9", value), value)
+                without_code += not value.startswith(("+", "00"))
+        # Numbers that all start with a country code are already international, even if countries differ.
+        if len(layouts) > 1 and without_code:
+            shown = ", ".join(f'"{v}"' for v in list(layouts.values())[:3])
+            add(f"phones:{col}", "low", f'Phone numbers written in different ways in "{col}"',
+                f"{_n(len(layouts), 'different layout')} (e.g. {shown}). Write them all in one international format.",
+                column=col, count=len(layouts), operation="standardize_phone")
+        return
+
+    # Country names: "USA", "U.S.A." and "america" for the same country
+    if _COUNTRY_NAME_RE.search(col):
+        from app.services.countries import country_code, country_name
+
+        counts = present.value_counts()
+        to_fix = 0
+        example = None
+        for value, n in counts.items():
+            code = country_code(value)
+            if code and value != country_name(code):
+                to_fix += int(n)
+                example = example or value
+        if to_fix:
+            add(f"countries:{col}", "low", f'Country names written in different ways in "{col}"',
+                f'{_n(to_fix, "value")} like "{example}" can be written as the full country name.',
+                column=col, count=to_fix, operation="standardize_country", example=example)
+        return
+
+    # Amounts stored as text: "$1,250.00", "Rs 1,25,000", "1.234,56 €"
+    if mostly_numeric:
+        return  # already reported as mixed types
+    values = _sample_unique(stripped)
+    parsed = [v for v in values if parse_amount(v)[0] is not None]
+    marked = [v for v in parsed if re.search(r"[^\d.\-+]", v)]  # a currency sign, code or separator
+    if values and marked and len(parsed) / len(values) >= 0.8:
+        add(f"amounts:{col}", "medium", f'Numbers stored as text in "{col}"',
+            f'Values like "{marked[0]}" contain currency signs or separators, so they cannot be summed or sorted. '
+            "Convert them to real numbers.", column=col, count=len(parsed), operation="clean_numbers", example=marked[0])
+
+
 def _n(count: int, word: str) -> str:
-    return f"{count:,} {word}{'' if count == 1 else 's'}"
+    if count == 1:
+        return f"{count:,} {word}"
+    return f"{count:,} {word}{'es' if word.endswith(('s', 'x', 'ch', 'sh')) else 's'}"
 
 
 def detect_issues(df: pd.DataFrame, profiles: list[dict] | None = None, stats: dict | None = None) -> list[dict]:
@@ -341,6 +427,7 @@ def detect_issues(df: pd.DataFrame, profiles: list[dict] | None = None, stats: d
                     add(f"case:{col}", "low", f'Inconsistent capitalisation in "{col}"',
                         f"{_n(len(mixed), 'value')} written with different capitalisation (e.g. {example}).",
                         column=col, count=len(mixed), operation="standardize_text")
+                _contact_and_amount_issues(col, text, stripped, add, mostly_numeric=share >= 0.8)
 
         if is_numeric_type(p["type"]):
             out = iqr_outliers(s)

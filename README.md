@@ -3,6 +3,10 @@
 **Clean Your Data. Trust Your Results.**
 A simple and powerful workspace to inspect, clean, and export better datasets.
 
+[![Tests](https://github.com/muneeb548/cleandata-studio/actions/workflows/tests.yml/badge.svg)](https://github.com/muneeb548/cleandata-studio/actions/workflows/tests.yml)
+
+> **© 2026 Raja Muneeb Ahmed. All rights reserved.** This repository is public so the code can be reviewed as a portfolio project. It is not open source: copying, reusing, redistributing or selling it requires written permission. See [LICENSE](LICENSE).
+
 CleanData Studio is a web application for cleaning messy tabular data without writing code. Upload a CSV, TSV, Excel or JSON file (up to 100 MB by default), review a data quality report, preview and apply cleaning operations (with undo and reset), compare before/after statistics, and download the cleaned file as CSV or Excel.
 
 ---
@@ -13,7 +17,8 @@ CleanData Studio is a web application for cleaning messy tabular data without wr
 - **Upload validation** — 100 MB default limit (configurable, checked in the browser and on the server, including streamed uploads without a declared size); UTF-8, UTF-8 with BOM, UTF-16 and Windows-1252 fallback; delimiter detection; empty, header-only, binary, corrupted and mismatched files rejected with helpful messages; PDFs, images and Word documents refused even if renamed; duplicate and blank column names renamed safely; ragged rows padded without losing data. If the two parsing passes disagree on the number of rows, the import fails instead of dropping records.
 - **Faithful import** — CSV/TSV/JSON values are imported as text exactly as written (`007` stays `007`, `3.10` stays `3.10`, JSON numbers keep their original text). Excel columns keep Excel's own types when the whole column agrees (integers, decimals, dates); mixed columns become text. Only truly empty cells count as missing.
 - **Data quality overview** — rows, columns, missing cells, duplicate rows, columns with missing values, completeness %, missing-by-column chart, column type distribution, per-column completeness, and a list of detected issues with one-click "Fix".
-- **Issue detection** — duplicates, empty rows/columns, missing values, extra spaces, space-only cells, placeholders such as `N/A`/`null`, mixed types, dates stored as text, inconsistent capitalisation, column names with spaces, IQR outliers.
+- **Issue detection** — duplicates, empty rows/columns, missing values, extra spaces, space-only cells, placeholders such as `N/A`/`null`, mixed types, dates stored as text and mixed date formats (with a day-first / month-first hint), inconsistent capitalisation, untidy or invalid email addresses, phone numbers without a country code, country names written in different ways, amounts stored as text (`$1,250.00`, `Rs 1,25,000`), column names with spaces, IQR outliers.
+- **⚡ Quick Clean** — proposes every fix that keeps the meaning of the data (exact duplicates when an ID column makes it safe, spaces, placeholders, one spelling per value, emails, country names, phone numbers using each row's country, dates), previews them together and applies them as separate, undoable steps. Missing values, outliers and ambiguous dates are listed for a human decision, never changed.
 - **Data preview** — paginated (50/100/200 rows), search across all columns, numeric-aware sorting, inferred types, missing values clearly labelled, original vs working data toggle.
 - **Cleaning operations** (all previewable before applying):
   - Remove duplicate rows (keep first / last)
@@ -25,8 +30,17 @@ CleanData Studio is a web application for cleaning messy tabular data without wr
   - IQR outlier review (read-only — never modifies data)
   - Remove empty rows / columns
   - Find and replace (exact or contains, case-sensitive option)
+  - Map many values at once from a table of the column's distinct values (`Isb`, `ISB` → `Islamabad`)
+  - Split a column (Full Name → First + Last, from the start or the end) and merge columns
+  - Standardize phone numbers from any country (Google libphonenumber): national, international or E.164 format; the country can come from a column such as `country`
+  - Standardize country names or ISO codes for all 249 ISO countries plus Kosovo, with common spellings, local names and three-letter codes
+  - Clean email addresses (spaces, capitals, `mailto:`, optional provider typo fixes) and list invalid ones
+  - Clean amounts in any currency and number style (`$1,250.00`, `Rs 1,25,000`, `1.234,56 €`, `(500)`) into real numbers, with a warning when one column mixes currencies
+  - Find near-duplicates (same record written differently, optional small spelling differences) and flag or remove them
+  - Flag rows for review in a new column (missing, invalid email or phone, not a number or date, repeated value) without changing any data
 - **Workflow safety** — original dataset never modified; undo last step; reset to original; confirmation dialogs for destructive steps; activity log; operations that change nothing are not recorded as applied.
 - **Before/after comparison** — real counts for rows, columns, missing cells, duplicates, completeness, rows/columns removed, cells modified, per-operation log and side-by-side previews.
+- **Change report and recipes** — a ready-to-send summary of every change for the client (copy, `.txt`, or a "Cleaning report" sheet in the Excel download), and cleaning recipes: save the applied steps as a `.json` file and apply them to next week's file with one click (the recipe holds only the steps, never data).
 - **Export** — CSV (UTF-8, optional BOM for Excel) or Excel `.xlsx`, generated from the current working data and streamed from a temporary file. Text that starts with `=` is stored as text in Excel (never as a formula); Excel's row/column/cell-length limits produce a clear error instead of a truncated file.
 - **Large files** — uploads are streamed to a temporary file; CSV/TSV is parsed by pandas' C parser and JSON by a streaming parser; undo history shares unchanged columns between steps (copy-on-write) and keeps older steps only within a memory budget; profiles, column types and sorted views are cached per dataset version.
 - **Privacy** — data kept in server memory only (temporary files exist just for the duration of an import or download), random 256-bit session IDs, 30-minute inactivity expiry, no external APIs, no cell values in logs, security headers, rate limiting.

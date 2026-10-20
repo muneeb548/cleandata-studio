@@ -15,6 +15,7 @@ import type {
   QuickCleanPlan,
   QuickCleanPreview,
   QuickCleanResult,
+  Recipe,
   OutlierReport,
   Profile,
   RowsPage,
@@ -219,6 +220,7 @@ export const api = {
       body: JSON.stringify({ operations, preview_token: previewToken }),
     }),
   report: () => request<ChangeReport>("/api/report"),
+  recipe: () => request<Recipe>("/api/recipe"),
   preview: (operation: Operation) =>
     request<OperationPreview>("/api/operations/preview", { method: "POST", body: JSON.stringify({ operation }) }),
   /** Operations that can remove data need the preview_token returned by preview(). */
@@ -235,10 +237,10 @@ export const api = {
     request<CompareRowsPage>(`/api/compare/rows${qs({ page, page_size: pageSize, changes_only: changesOnly || undefined })}`),
 
   /** Downloads the current working dataset and returns the filename used. */
-  async exportFile(filename: string, format: ExportFormat, bom: boolean, protectFormulas = false): Promise<string> {
+  async exportFile(filename: string, format: ExportFormat, bom: boolean, protectFormulas = false, includeReport = false): Promise<string> {
     const sid = getSessionId();
     const response = await send(
-      `${BASE}/api/export${qs({ filename, format, bom: format === "csv" ? bom : undefined, protect_formulas: format === "csv" && protectFormulas ? true : undefined })}`,
+      `${BASE}/api/export${qs({ filename, format, bom: format === "csv" ? bom : undefined, protect_formulas: format === "csv" && protectFormulas ? true : undefined, include_report: format === "xlsx" && includeReport ? true : undefined })}`,
       { headers: sid ? { "X-Session-Id": sid } : {} },
       TIMEOUT_MS * 3, // Excel export of a large dataset can be slow
     );

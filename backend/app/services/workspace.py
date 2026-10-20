@@ -408,6 +408,26 @@ def apply_quick_clean(session: Session, ops: list[BaseModel], preview_token: str
         return {"steps": steps, "applied": sum(s["applied"] for s in steps), "session": session_info(session)}
 
 
+def recipe(session: Session) -> dict:
+    """The applied steps as a reusable recipe: apply it to next week's file with one click."""
+    from datetime import datetime, timezone
+
+    with session.lock:
+        if not session.history:
+            raise AppError("no_steps", "No cleaning steps have been applied yet.",
+                           "Apply the steps you want to reuse, then save the recipe.", status=409)
+        stem = os.path.splitext(session.filename)[0]
+        return {
+            "app": "CleanData Studio",
+            "kind": "cleaning-recipe",
+            "version": 1,
+            "name": f"{stem} cleanup",
+            "source_file": session.filename,
+            "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "steps": [h.params for h in session.history],
+        }
+
+
 def change_report(session: Session) -> dict:
     from app.services.quick_clean import change_report as build
 
@@ -565,7 +585,7 @@ EXPORT_FORMATS = {"csv": ("text/csv; charset=utf-8", ".csv"),
 
 
 def export_file(session: Session, filename: str | None = None, fmt: str = "csv", bom: bool = False,
-                protect_formulas: bool = False) -> tuple[str, str, str]:
+                protect_formulas: bool = False, include_report: bool = False) -> tuple[str, str, str]:
     """Write the current working data to a temporary file.
 
     Returns (path, download name, media type). The caller streams the file and
@@ -577,10 +597,11 @@ def export_file(session: Session, filename: str | None = None, fmt: str = "csv",
     name = safe_output_name(filename, session.filename, ext)
     with session.lock:
         df = session.current
+    report_lines = change_report(session)["message"].split("\n") if include_report and fmt == "xlsx" else None
     fd, path = tempfile.mkstemp(prefix="cleandata_export_", suffix=ext)
     os.close(fd)
     try:
-        write_export(df, path, fmt, bom=bom, protect_formulas=protect_formulas)
+        write_export(df, path, fmt, bom=bom, protect_formulas=protect_formulas, report_lines=report_lines)
     except BaseException:
         _remove(path)
         raise

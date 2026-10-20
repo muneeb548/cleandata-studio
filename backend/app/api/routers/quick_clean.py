@@ -6,7 +6,7 @@ from fastapi import APIRouter
 
 from app.api.deps import SESSION_ERRORS, VALIDATION_ERROR, SessionDep
 from app.schemas.operations import QuickCleanRequest
-from app.schemas.responses import ChangeReport, ErrorResponse, QuickCleanPlan, QuickCleanPreview, QuickCleanResult
+from app.schemas.responses import ChangeReport, ErrorResponse, QuickCleanPlan, QuickCleanPreview, QuickCleanResult, Recipe
 from app.services import workspace
 
 router = APIRouter(tags=["quick clean"])
@@ -40,3 +40,11 @@ def apply(body: QuickCleanRequest, session: SessionDep) -> dict:
 @router.get("/report", response_model=ChangeReport, summary="What was changed, for the client", responses=SESSION_ERRORS)
 def report(session: SessionDep) -> dict:
     return workspace.change_report(session)
+
+
+@router.get("/recipe", response_model=Recipe, summary="Applied steps as a reusable recipe",
+            responses={**SESSION_ERRORS, 409: {"model": ErrorResponse, "description": "No steps applied yet."}})
+def recipe(session: SessionDep) -> dict:
+    """Download this, then send its `steps` as `operations` to /api/quick-clean/preview and /apply
+    to repeat the same cleaning on another file."""
+    return workspace.recipe(session)
