@@ -23,6 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ApiError, SESSION_GONE, api } from "@/api/client";
+import { AiSuggestMappings } from "./Ai";
 import type { ColumnProfile, ColumnValues, FlagRule, Operation, OperationPreview, OutlierReport, Profile } from "@/api/types";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -603,6 +604,9 @@ function MapValuesForm({ form, set, cols }: { form: FormState; set: (patch: Part
         </div>
         <Checkbox id="map-case" className="sm:mt-7" checked={form.mapIgnoreCase} onChange={(e) => set({ mapIgnoreCase: e.target.checked })} label="Ignore capitals and outer spaces" description="“ISB”, “isb ” and “Isb” follow the same row." />
       </div>
+      {values && !loading && values.distinct > 1 && (
+        <AiSuggestMappings column={form.mapColumn} edits={form.mapEdits} onEdits={(mapEdits) => set({ mapEdits })} />
+      )}
       {loading && <LoadingBlock />}
       {values && !loading && (
         <div className="space-y-2">

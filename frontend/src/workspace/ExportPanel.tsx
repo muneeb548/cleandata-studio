@@ -11,6 +11,7 @@ import { Checkbox, FieldHint, Input, Label, RadioCard } from "@/components/ui/fo
 import { useToast } from "@/components/ui/toast";
 import { formatNumber, suggestedOutputName } from "@/lib/utils";
 import { KeyValue } from "./shared";
+import { AiSummaryCard } from "./Ai";
 import { ChangeReportCard } from "./QuickClean";
 import { RecipeCard } from "./Recipes";
 import { useWorkspace } from "./WorkspaceContext";
@@ -166,6 +167,7 @@ export function ExportPanel() {
       <div className="grid items-start gap-5 lg:grid-cols-2">
         <ChangeReportCard />
         <RecipeCard />
+        <AiSummaryCard />
       </div>
     </div>
   );

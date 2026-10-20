@@ -92,6 +92,21 @@ class Settings:
     # Folder with the built frontend (frontend/dist). When set, the API server also serves the website.
     frontend_dist: str = field(default_factory=lambda: os.getenv("FRONTEND_DIST", "").strip())
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO")
+    # --- AI assistant (optional, off by default) ---
+    # off: no AI. ollama: a model running on this computer (free, data stays here).
+    # anthropic: Claude API in the cloud (paid; the user must agree before data is sent).
+    ai_provider: str = field(default_factory=lambda: os.getenv("AI_PROVIDER", "off").strip().lower() or "off")
+    # Empty = a sensible default for the provider (see app.services.ai_client).
+    ai_model: str = field(default_factory=lambda: os.getenv("AI_MODEL", "").strip())
+    ollama_url: str = field(default_factory=lambda: os.getenv("OLLAMA_URL", "http://localhost:11434").strip().rstrip("/"))
+    anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", "").strip(), repr=False)
+    # Also send up to AI_MAX_VALUES example values per column (needed for value mapping).
+    # false = only column names, types and counts ever leave the data.
+    ai_send_values: bool = field(default_factory=lambda: _bool("AI_SEND_VALUES", True))
+    ai_max_values: int = field(default_factory=lambda: _int("AI_MAX_VALUES", 20))
+    ai_timeout_seconds: int = field(default_factory=lambda: _int("AI_TIMEOUT_SECONDS", 180))
+    # AI requests allowed per uploaded file (protects a paid API key). 0 = unlimited.
+    ai_max_calls_per_session: int = field(default_factory=lambda: _int("AI_MAX_CALLS_PER_SESSION", 30))
 
     @property
     def is_production(self) -> bool:
@@ -106,6 +121,10 @@ class Settings:
         issues = []
         if self.environment not in ("development", "production"):
             issues.append(f"ENVIRONMENT must be 'development' or 'production', not '{self.environment}'.")
+        if self.ai_provider not in ("off", "ollama", "anthropic"):
+            issues.append(f"AI_PROVIDER must be off, ollama or anthropic, not '{self.ai_provider}'.")
+        if self.ai_provider == "anthropic" and not self.anthropic_api_key:
+            issues.append("AI_PROVIDER=anthropic needs ANTHROPIC_API_KEY.")
         if self.is_production:
             if any(o == "*" for o in self.cors_origins):
                 issues.append("CORS_ORIGINS must list your site's origin(s); '*' is not allowed in production.")

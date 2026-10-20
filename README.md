@@ -19,6 +19,7 @@ CleanData Studio is a web application for cleaning messy tabular data without wr
 - **Data quality overview** — rows, columns, missing cells, duplicate rows, columns with missing values, completeness %, missing-by-column chart, column type distribution, per-column completeness, and a list of detected issues with one-click "Fix".
 - **Issue detection** — duplicates, empty rows/columns, missing values, extra spaces, space-only cells, placeholders such as `N/A`/`null`, mixed types, dates stored as text and mixed date formats (with a day-first / month-first hint), inconsistent capitalisation, untidy or invalid email addresses, phone numbers without a country code, country names written in different ways, amounts stored as text (`$1,250.00`, `Rs 1,25,000`), column names with spaces, IQR outliers.
 - **⚡ Quick Clean** — proposes every fix that keeps the meaning of the data (exact duplicates when an ID column makes it safe, spaces, placeholders, one spelling per value, emails, country names, phone numbers using each row's country, dates), previews them together and applies them as separate, undoable steps. Missing values, outliers and ambiguous dates are listed for a human decision, never changed.
+- **✨ AI assistant (optional, off by default)** — *Ask AI*: describe the cleaning in your own words (English, Urdu, Roman Urdu…) and get a plan made of the app's own operations; *Suggest with AI* fills the Map values table (`Lhr`, `LAHORE` → `Lahore`); *AI summary* writes a plain-language report in the client's language. Runs on a free local model through [Ollama](https://ollama.com) (data never leaves the computer) or on the Claude API (cloud, asks for consent first). See [AI assistant](#ai-assistant).
 - **Data preview** — paginated (50/100/200 rows), search across all columns, numeric-aware sorting, inferred types, missing values clearly labelled, original vs working data toggle.
 - **Cleaning operations** (all previewable before applying):
   - Remove duplicate rows (keep first / last)
@@ -264,11 +265,40 @@ All endpoints except health/config/upload/operations catalog require the header 
 | GET | `/api/compare` | Before/after statistics |
 | GET | `/api/compare/rows?page=&page_size=&changes_only=` | Row-level comparison with changed cells flagged |
 | GET | `/api/export?filename=&format=csv\|xlsx&bom=&protect_formulas=` | Download the working data |
+| GET | `/api/ai/status` | Is the AI assistant on and ready, where does it run, what is shared |
+| POST | `/api/ai/plan` | Plain-language request → validated cleaning steps (nothing is changed) |
+| POST | `/api/ai/map-values` | Suggested value mapping for one column |
+| POST | `/api/ai/summary` | Plain-language report of the cleaning |
+
+## AI assistant
+
+The AI is **off by default**; the app works fully without it. It has three features: **Ask AI** (Overview page), **Suggest with AI** (Map values form) and **AI summary** (Download page).
+
+**How it stays safe.** The model never runs code and never receives the whole file. It gets a short description (column names, types, counts and, unless `AI_SEND_VALUES=false`, up to 20 example values per column) and must answer with JSON that matches a fixed schema. Every proposed step is checked with the same validation as the normal API, must use real columns, and is tried on a sample first; anything else is dropped and shown as "left out by the safety check". Nothing changes until you preview and press Apply, and each step can be undone. Prompts and answers are not logged.
+
+### Free local AI with Ollama (recommended, data stays on your computer)
+
+1. Install Ollama from <https://ollama.com/download> (Windows installer) and open it.
+2. In PowerShell, download a model (about 2 GB, once):
+   ```powershell
+   ollama pull qwen2.5:3b
+   ```
+3. In `backend\.env` set:
+   ```
+   AI_PROVIDER=ollama
+   ```
+4. Restart the backend. **Ask AI** appears on the Overview page.
+
+`qwen2.5:3b` runs on a laptop with 8 GB RAM without a graphics card; answers take roughly 20 seconds to 2 minutes. On a weaker machine try `AI_MODEL=qwen2.5:1.5b` (faster, less accurate); with 16 GB RAM `qwen2.5:7b` gives better plans.
+
+### Claude API (cloud, paid — for a hosted version)
+
+Set `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...` (from <https://console.anthropic.com>). The default model is `claude-haiku-5-5` (change with `AI_MODEL`). The data description is sent to Anthropic, so every request needs the user's consent (a checkbox in the app; `consent: true` in the API). `AI_MAX_CALLS_PER_SESSION` (default 30) limits cost per uploaded file. If your users' data is personal data under GDPR or similar laws, check Anthropic's data processing terms and tell your users in your privacy policy.
 
 ## Security and privacy
 
 - An upload is streamed to a private temporary file (in the system temp folder) and deleted as soon as the import finishes or fails; downloads are written to a temporary file and deleted after sending. Datasets are otherwise kept only in memory and never stored in a database.
-- Data is never sent to external AI services or third-party APIs.
+- Data is never sent to external AI services or third-party APIs, unless you turn on the optional cloud AI (`AI_PROVIDER=anthropic`); then only a description of the data is sent, and only after the user ticks a consent box. The default AI option (Ollama) runs on the same computer.
 - Each upload returns a session token `<id>.<secret>` (2 × 256 random bits). The server keeps only a SHA-256 hash of the secret and compares it in constant time; a malformed token, the public id alone, or another session's secret is rejected with 404. Sessions expire after `SESSION_TTL_MINUTES` of inactivity (a background task removes them every minute) or when deleted. Restarting the server deletes all data.
 - Operations that can remove rows or columns can only be applied with a `preview_token` from a preview of the exact same operation on the same data version (HMAC with a per-session key), so data loss is always previewed first — even when the API is called directly.
 - The original upload is never modified; each applied step stores a snapshot (unchanged columns are shared, not copied), so Undo restores the exact previous data instead of recomputing it.
@@ -318,7 +348,7 @@ In the browser test (Chromium), uploading and analysing the 99.7 MB CSV took abo
 
 ## Future improvements
 
-Faster Excel reading (e.g. the optional `python-calamine` engine), Arrow-backed strings to cut memory use, AI-assisted cleaning suggestions, automated profiling reports, saved projects and user accounts, cloud storage, team collaboration, custom validation rules, scheduled cleaning jobs, data pipeline integrations, and a blog with guides (for example "How to Clean CSV Files" and "How to Handle Missing Values"). New public pages can be added in `frontend/src/App.tsx`, `PUBLIC_PAGES` in `frontend/seo-plugin.ts` (sitemap) and `SPA_ROUTES` in `backend/app/web.py`.
+Faster Excel reading (e.g. the optional `python-calamine` engine), Arrow-backed strings to cut memory use, "chat with your data" questions answered by the AI as safe, validated queries, automated profiling reports, saved projects and user accounts, cloud storage, team collaboration, custom validation rules, scheduled cleaning jobs, data pipeline integrations, and a blog with guides (for example "How to Clean CSV Files" and "How to Handle Missing Values"). New public pages can be added in `frontend/src/App.tsx`, `PUBLIC_PAGES` in `frontend/seo-plugin.ts` (sitemap) and `SPA_ROUTES` in `backend/app/web.py`.
 
 ## Deployment
 

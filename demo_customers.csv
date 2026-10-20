@@ -1,0 +1,13 @@
+order_id,customer,email,phone,country,city,status,order_date
+1001,John Smith,John.Smith@Gmail.com ,(650) 253-0000,USA,San Francisco,Paid,01/15/2026
+1002,Emma Watson,emma.watson@yahoo.co.uk,020 7031 3000,UK,London,paid,2026-01-16
+1003,Ali Khan,mailto:ali.khan@gmail.com,0300-1234567,Pakistan,Lahore,PAID,Jan 17 2026
+1004,Hans Müller,hans.mueller@web.de,+49 30 901820,Germany,Berlin,Pending,01/18/2026
+1005,Sara Ahmed, SARA.AHMED@outlook.com,+92 321 7654321,pakistan,Karachi,pending ,2026-01-19
+1006,Maria Garcia,maria.garcia@gmail.com,650.253.0000,U.S.A.,Mountain View,N/A,01/20/2026
+1007,David Brown,david.brown@gmail.com,02070313000,England,London,Paid,Jan 21 2026
+1006,Maria Garcia,maria.garcia@gmail.com,650.253.0000,U.S.A.,Mountain View,N/A,01/20/2026
+1008,Ayesha Malik,ayesha@hotmail.com,0333-5551234,PK,Islamabad,Refunded,2026-01-22
+1009,Liam O'Brien,liam.obrien@gmail.com,not available,Ireland,Dublin,paid,01/23/2026
+1010,Zoya Raza,zoya.raza@gmail.com,0301 2345678,Pakistan,lahore,Paid,Jan 24 2026
+1011,Olivia Jones,OLIVIA@ICLOUD.COM,(415) 555-0132,United States,New York,null,01/25/2026

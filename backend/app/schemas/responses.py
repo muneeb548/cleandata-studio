@@ -393,3 +393,57 @@ class CompareRowsPage(_Model):
     total_rows: int
     total_pages: int
     changes_only: bool
+
+
+# --------------------------------------------------------------------------- AI assistant
+
+class AiStatus(_Model):
+    enabled: bool = Field(description="False when AI_PROVIDER=off.")
+    ready: bool = Field(description="True when requests can be answered right now.")
+    provider: Literal["off", "ollama", "anthropic"]
+    model: str
+    label: str
+    local: bool = Field(description="True when the data stays on this computer.")
+    needs_consent: bool = Field(description="True for a cloud AI: requests must include consent=true.")
+    sends_values: bool = Field(description="True when example values from the file are shared with the AI.")
+    shared: str = Field(description="What is shared with the AI, in plain words.")
+    problem: str | None = Field(description="Why the AI is not ready, and how to fix it.")
+
+
+class AiStep(_Model):
+    operation: dict[str, Any] = Field(description="A validated operation, ready for /api/quick-clean/preview.")
+    label: str
+    reason: str
+
+
+class AiRejectedStep(_Model):
+    label: str
+    reason: str
+
+
+class AiPlan(_Model):
+    reply: str
+    steps: list[AiStep]
+    rejected: list[AiRejectedStep] = Field(description="Steps the AI proposed that the app refused, with the reason.")
+    shared: str
+    provider: str
+
+
+class AiMapping(_Model):
+    value: str
+    to: str
+
+
+class AiMappings(_Model):
+    column: str
+    mappings: list[AiMapping] = Field(description="Ready for the map_values operation.")
+    checked: int = Field(description="Number of different values the AI looked at.")
+    truncated: bool
+    shared: str
+    provider: str
+
+
+class AiSummary(_Model):
+    summary: str
+    shared: str
+    provider: str

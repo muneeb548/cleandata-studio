@@ -1,4 +1,8 @@
 import type {
+  AiMappings,
+  AiPlan,
+  AiStatus,
+  AiSummary,
   AppConfig,
   ApplyResult,
   ChangeReport,
@@ -32,6 +36,7 @@ const BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "").r
 /** Default request timeout. Large datasets can take a while to profile, so it is generous. */
 const TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS) || 120_000;
 const SESSION_KEY = "cleandata.session";
+const AI_TIMEOUT_MS = 240_000;
 
 /** Error with a user-facing message and an optional suggestion, as sent by the API. */
 export class ApiError extends Error {
@@ -221,6 +226,14 @@ export const api = {
     }),
   report: () => request<ChangeReport>("/api/report"),
   recipe: () => request<Recipe>("/api/recipe"),
+  aiStatus: () => request<AiStatus>("/api/ai/status"),
+  // A local model on a laptop can take a few minutes, so AI requests wait longer.
+  aiPlan: (text: string, consent: boolean) =>
+    request<AiPlan>("/api/ai/plan", { method: "POST", body: JSON.stringify({ request: text, consent }) }, AI_TIMEOUT_MS),
+  aiMapValues: (column: string, consent: boolean) =>
+    request<AiMappings>("/api/ai/map-values", { method: "POST", body: JSON.stringify({ column, consent }) }, AI_TIMEOUT_MS),
+  aiSummary: (language: string, consent: boolean) =>
+    request<AiSummary>("/api/ai/summary", { method: "POST", body: JSON.stringify({ language, consent }) }, AI_TIMEOUT_MS),
   preview: (operation: Operation) =>
     request<OperationPreview>("/api/operations/preview", { method: "POST", body: JSON.stringify({ operation }) }),
   /** Operations that can remove data need the preview_token returned by preview(). */

@@ -12,9 +12,9 @@ import { CHOICES } from "./operationForms";
 import { toApiError } from "./useAsync";
 import { useWorkspace } from "./WorkspaceContext";
 
-const stepLabel = (op: Operation) => CHOICES.find((c) => c.id === op.type)?.label ?? op.type;
+export const stepLabel = (op: Operation) => CHOICES.find((c) => c.id === op.type)?.label ?? op.type;
 
-function stepDetail(op: Operation): string {
+export function stepDetail(op: Operation): string {
   const cols = "columns" in op && Array.isArray(op.columns) && op.columns.length ? ` · ${op.columns.join(", ")}` : "";
   const col = "column" in op && typeof op.column === "string" ? ` · ${op.column}` : "";
   return cols || col;

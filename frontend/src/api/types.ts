@@ -368,3 +368,44 @@ export interface CompareRowsPage {
   total_pages: number;
   changes_only: boolean;
 }
+
+// --------------------------------------------------------------------------- AI assistant
+
+export interface AiStatus {
+  enabled: boolean;
+  ready: boolean;
+  provider: "off" | "ollama" | "anthropic";
+  model: string;
+  label: string;
+  /** true when the data stays on this computer */
+  local: boolean;
+  /** cloud AI: requests must include consent: true */
+  needs_consent: boolean;
+  sends_values: boolean;
+  /** what is shared with the AI, in plain words */
+  shared: string;
+  problem: string | null;
+}
+
+export interface AiPlan {
+  reply: string;
+  steps: { operation: Operation; label: string; reason: string }[];
+  rejected: { label: string; reason: string }[];
+  shared: string;
+  provider: string;
+}
+
+export interface AiMappings {
+  column: string;
+  mappings: { value: string; to: string }[];
+  checked: number;
+  truncated: boolean;
+  shared: string;
+  provider: string;
+}
+
+export interface AiSummary {
+  summary: string;
+  shared: string;
+  provider: string;
+}

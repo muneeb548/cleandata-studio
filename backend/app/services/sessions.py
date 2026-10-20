@@ -105,6 +105,8 @@ class Session:
     cache: dict = field(default_factory=dict, repr=False)
     # Estimated memory of the original upload (for the server-wide memory budget).
     original_bytes: int = 0
+    # AI assistant requests made for this file (see AI_MAX_CALLS_PER_SESSION).
+    ai_calls: int = 0
 
     @property
     def memory_bytes(self) -> int:

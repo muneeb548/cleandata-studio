@@ -24,6 +24,7 @@ import { EmptyState, LoadingBlock, Meter } from "@/components/ui/misc";
 import { PageHeader, StatCard } from "@/components/ui/page";
 import { Table, TableContainer, TD, TH, THead, TR } from "@/components/ui/table";
 import { cn, formatNumber, formatPercent, pluralize } from "@/lib/utils";
+import { AskAiButton } from "./Ai";
 import { QuickCleanButton } from "./QuickClean";
 import { ApplyRecipeButton } from "./Recipes";
 import { DatasetToggle, TypeBadge, typeLabel } from "./shared";
@@ -205,6 +206,7 @@ export function OverviewPanel() {
       actions={
         <div className="flex flex-wrap items-center gap-2">
           {dataset === "current" && <ApplyRecipeButton />}
+          {dataset === "current" && <AskAiButton />}
           {dataset === "current" && <QuickCleanButton />}
           <DatasetToggle value={dataset} onChange={setDataset} />
         </div>
