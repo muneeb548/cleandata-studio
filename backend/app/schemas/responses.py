@@ -125,6 +125,8 @@ class ColumnProfile(_Model):
     max: Cell = None
     mean: Cell = None
     median: Cell = None
+    looks_empty: int = Field(0, description='Cells that are not empty but hold a placeholder ("N/A", "null") or only spaces.')
+    issues: int = Field(0, description="Detected problems in this column (notes to review not included).")
 
 
 class Issue(_Model):
@@ -138,12 +140,22 @@ class Issue(_Model):
     example: str | None = Field(None, description="A real value from the data that triggered the issue (used to pre-fill fixes).")
 
 
+class DataHealth(_Model):
+    looks_empty_cells: int = Field(description='Cells holding "N/A", "null" and similar placeholders, or only spaces.')
+    real_completeness: float | None = Field(description="Completeness when those cells also count as missing.")
+    issues: int = Field(description="Problems found (notes to review not included).")
+    notes: int = Field(description='Findings that are only worth a look ("To review").')
+    columns_with_issues: int
+    needs_cleaning: bool = Field(description="True when at least one problem (not only review notes) was found.")
+
+
 class Profile(_Model):
     dataset: Literal["original", "current"]
     stats: Stats
     columns: list[ColumnProfile]
     type_distribution: dict[str, int]
     issues: list[Issue]
+    health: DataHealth | None = Field(None, description="Not calculated in the light profile.")
     light: bool = False
 
 

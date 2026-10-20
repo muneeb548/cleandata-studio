@@ -99,6 +99,22 @@ export interface ColumnProfile {
   max?: CellValue;
   mean?: CellValue;
   median?: CellValue;
+  /** cells holding "N/A", "null"… or only spaces (full profile only) */
+  looks_empty?: number;
+  /** detected problems in this column (full profile only) */
+  issues?: number;
+}
+
+export interface Health {
+  looks_empty_cells: number;
+  /** completeness when placeholder and space-only cells also count as missing */
+  real_completeness: number | null;
+  /** problems found (notes to review not included) */
+  issues: number;
+  /** findings that are only worth a look */
+  notes: number;
+  columns_with_issues: number;
+  needs_cleaning: boolean;
 }
 
 export type Severity = "high" | "medium" | "low" | "info";
@@ -121,6 +137,8 @@ export interface Profile {
   columns: ColumnProfile[];
   type_distribution: Partial<Record<ColumnType, number>>;
   issues: Issue[];
+  /** not calculated in the light profile */
+  health?: Health | null;
 }
 
 export interface RowsPage {

@@ -77,7 +77,8 @@ function QualitySummary({ profile, applied }: { profile: Profile; applied: numbe
   const s = profile.stats;
   const counts: Record<Severity, number> = { high: 0, medium: 0, low: 0, info: 0 };
   profile.issues.forEach((i) => counts[i.severity]++);
-  const pct = s.completeness;
+  const pct = profile.health?.real_completeness ?? s.completeness;
+  const looksEmpty = profile.health?.looks_empty_cells ?? 0;
   return (
     <Card className="flex flex-col">
       <CardHeader>
@@ -92,7 +93,9 @@ function QualitySummary({ profile, applied }: { profile: Profile; applied: numbe
           </div>
           <Meter value={pct} className="mt-2 h-2" />
           <p className="mt-2 text-caption text-muted-foreground">
-            {s.total_cells ? `${formatNumber(s.total_cells - s.missing_cells)} of ${formatNumber(s.total_cells)} cells have a value.` : "The dataset has no cells."}
+            {s.total_cells
+              ? `${formatNumber(s.total_cells - s.missing_cells - looksEmpty)} of ${formatNumber(s.total_cells)} cells have a real value.${looksEmpty ? ` ${pluralize(looksEmpty, "cell")} only say "N/A", "null" or similar.` : ""}`
+              : "The dataset has no cells."}
           </p>
         </div>
         <dl className="divide-y divide-border rounded-md border border-border">
@@ -234,6 +237,10 @@ export function OverviewPanel() {
   }
   const s = profile.stats;
   const issues = showAll ? profile.issues : profile.issues.slice(0, ISSUE_PREVIEW);
+  const health = profile.health;
+  const looksEmpty = health?.looks_empty_cells ?? 0;
+  const completeness = health?.real_completeness ?? s.completeness;
+  const gapColumns = health ? profile.columns.filter((c) => c.missing > 0 || (c.looks_empty ?? 0) > 0).length : s.columns_with_missing;
 
   return (
     <div className={cn("space-y-6", loading && "opacity-70 transition-opacity")} aria-busy={loading}>
@@ -249,13 +256,34 @@ export function OverviewPanel() {
         </Alert>
       ) : null}
 
+      {health && (
+        health.needs_cleaning ? (
+          <Alert
+            tone="warning"
+            title={`This data needs cleaning: ${pluralize(health.issues, "problem")}${health.columns_with_issues ? ` in ${pluralize(health.columns_with_issues, "column")}` : ""}${health.notes ? ` + ${pluralize(health.notes, "note")} to review` : ""}`}
+          >
+            Completeness only shows empty cells, so check the problems listed below. Quick Clean fixes the safe ones in one go.
+          </Alert>
+        ) : (
+          <Alert tone="success" title={health.notes ? `No problems found, only ${pluralize(health.notes, "note")} to review` : "No problems found"}>
+            The checks found nothing that needs fixing in this data.
+          </Alert>
+        )
+      )}
+
       <section aria-label="Dataset overview" className="grid grid-cols-2 gap-4 md:grid-cols-3 2xl:grid-cols-6">
         <StatCard icon={Rows3} label="Total rows" value={formatNumber(s.rows)} />
         <StatCard icon={Columns3} label="Total columns" value={formatNumber(s.columns)} />
-        <StatCard icon={SquareDashed} label="Missing cells" value={formatNumber(s.missing_cells)} tone={s.missing_cells ? "warning" : "success"} hint={s.total_cells ? `of ${formatNumber(s.total_cells)} cells` : undefined} />
+        <StatCard
+          icon={SquareDashed}
+          label="Missing cells"
+          value={formatNumber(s.missing_cells + looksEmpty)}
+          tone={s.missing_cells + looksEmpty ? "warning" : "success"}
+          hint={looksEmpty ? `${formatNumber(s.missing_cells)} empty + ${formatNumber(looksEmpty)} "N/A"-style` : s.total_cells ? `of ${formatNumber(s.total_cells)} cells` : undefined}
+        />
         <StatCard icon={Copy} label="Duplicate rows" value={formatNumber(s.duplicate_rows)} tone={s.duplicate_rows ? "warning" : "success"} hint={s.duplicate_rows ? "exact copies" : "none found"} />
-        <StatCard icon={Columns3} label="Columns with gaps" value={formatNumber(s.columns_with_missing)} tone={s.columns_with_missing ? "warning" : "success"} hint="contain missing values" />
-        <StatCard icon={Gauge} label="Completeness" value={formatPercent(s.completeness)} tone={s.completeness === null ? "neutral" : s.completeness >= 95 ? "success" : "warning"} hint="non-missing cells" />
+        <StatCard icon={Columns3} label="Columns with gaps" value={formatNumber(gapColumns)} tone={gapColumns ? "warning" : "success"} hint="contain missing values" />
+        <StatCard icon={Gauge} label="Completeness" value={formatPercent(completeness)} tone={completeness === null ? "neutral" : completeness >= 95 ? "success" : "warning"} hint={looksEmpty ? "N/A-style cells count as missing" : "non-missing cells"} />
       </section>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
@@ -317,20 +345,21 @@ export function OverviewPanel() {
       <Card>
         <CardHeader>
           <CardTitle>Column completeness</CardTitle>
-          <CardDescription>Share of non-missing values, unique values and type for each column.</CardDescription>
+          <CardDescription>Real values per column ("N/A", "null" and space-only cells count as missing), unique values, type and detected problems.</CardDescription>
         </CardHeader>
         {profile.columns.length === 0 ? (
           <EmptyState title="No columns in this dataset" />
         ) : (
           <TableContainer label="Column completeness" maxHeight="max-h-[28rem]">
-            <Table className="min-w-[560px]">
+            <Table className="min-w-[640px]">
               <THead>
                 <tr>
                   <TH scope="col" className="pl-5">Column</TH>
                   <TH scope="col">Type</TH>
                   <TH scope="col" className="text-right">Missing</TH>
                   <TH scope="col" className="text-right">Unique</TH>
-                  <TH scope="col" className="w-1/3 pr-5">Completeness</TH>
+                  <TH scope="col">Problems</TH>
+                  <TH scope="col" className="w-1/4 pr-5">Completeness</TH>
                 </tr>
               </THead>
               <tbody>
@@ -342,8 +371,20 @@ export function OverviewPanel() {
                     <TD>
                       <TypeBadge type={c.type} />
                     </TD>
-                    <TD className="tabular text-right">{formatNumber(c.missing)}</TD>
+                    <TD className="tabular text-right">
+                      {formatNumber(c.missing)}
+                      {c.looks_empty ? <span className="block text-caption text-amber-800">+{formatNumber(c.looks_empty)} N/A-style</span> : null}
+                    </TD>
                     <TD className="tabular text-right">{formatNumber(c.unique)}</TD>
+                    <TD>
+                      {c.issues === undefined ? null : c.issues ? (
+                        <Badge tone="warning">{pluralize(c.issues, "problem")}</Badge>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-caption text-success">
+                          <CheckCircle2 className="size-3.5" aria-hidden="true" /> OK
+                        </span>
+                      )}
+                    </TD>
                     <TD className="pr-5">
                       <div className="flex items-center gap-3">
                         <Meter value={c.completeness} className="flex-1" />

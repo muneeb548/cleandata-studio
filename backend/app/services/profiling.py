@@ -373,7 +373,7 @@ def detect_issues(df: pd.DataFrame, profiles: list[dict] | None = None, stats: d
                 tokens = ", ".join(f'"{t}"' for t in common.index[:3])
                 add(f"placeholder:{col}", "medium", f'Missing-value placeholders in "{col}"',
                     f"{_n(placeholders, 'value')} that look like placeholders ({tokens}). "
-                    "They are not counted as missing until you replace them.",
+                    "They count as missing in the completeness score; replace them with real empty cells.",
                     column=col, count=placeholders, operation="find_replace", example=str(common.index[0]))
             # Spreadsheet apps may run text starting with =, +, - or @ as a formula when a CSV is opened.
             starts = stripped.str.match(r"^[=+\-@]").fillna(False).astype(bool)
@@ -449,12 +449,52 @@ def detect_issues(df: pd.DataFrame, profiles: list[dict] | None = None, stats: d
     return issues
 
 
+def health(stats: dict, profiles: list[dict], issues: list[dict]) -> dict:
+    """How clean the data really is, beyond empty cells.
+
+    "Completeness" counts only truly empty cells, so a file full of "N/A", "null" or
+    space-only cells can look 100% complete. Here those cells count as missing, and every
+    column records how many problems were found in it, so a messy file never looks clean.
+    """
+    looks_empty: dict[str, int] = {}
+    per_column: dict[str, int] = {}
+    problems = [i for i in issues if i["severity"] != "info"]  # "info" = a note to review, not a problem
+    for issue in issues:
+        col = issue.get("column")
+        if col is None:
+            continue
+        if issue["severity"] != "info":
+            per_column[col] = per_column.get(col, 0) + 1
+        kind = issue["id"].split(":", 1)[0]
+        if kind in ("placeholder", "blank"):
+            looks_empty[col] = looks_empty.get(col, 0) + int(issue.get("count") or 0)
+    rows = stats["rows"]
+    for p in profiles:
+        empty = looks_empty.get(p["name"], 0)
+        p["looks_empty"] = empty
+        p["issues"] = per_column.get(p["name"], 0)  # problems only, notes not counted
+        if rows:
+            p["completeness"] = round((rows - p["missing"] - empty) / rows * 100, 2)
+    total = stats["total_cells"]
+    empty_total = sum(looks_empty.values())
+    return {
+        "looks_empty_cells": empty_total,
+        "real_completeness": None if total == 0 else round((total - stats["missing_cells"] - empty_total) / total * 100, 2),
+        "issues": len(problems),
+        "notes": len(issues) - len(problems),
+        "columns_with_issues": len(per_column),
+        "needs_cleaning": bool(problems),
+    }
+
+
 def full_profile(df: pd.DataFrame, types: dict[str, str] | None = None, stats: dict | None = None) -> dict:
     stats = stats or basic_stats(df)
     profiles = column_profiles(df, types)
+    issues = detect_issues(df, profiles, stats)
     return {
         "stats": stats,
         "columns": profiles,
         "type_distribution": type_distribution(profiles),
-        "issues": detect_issues(df, profiles, stats),
+        "issues": issues,
+        "health": health(stats, profiles, issues),
     }

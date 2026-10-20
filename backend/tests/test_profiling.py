@@ -196,3 +196,24 @@ def test_amounts_stored_as_text(frame):
 
 def test_plain_words_are_not_amounts(frame):
     assert _issue(frame("city\nLahore\nKarachi\nLondon\n"), "amounts:city") is None
+
+
+def test_health_counts_placeholders_as_missing(frame):
+    df = frame("id,status,city\n1,N/A,Lahore\n2,null,Lahore \n3,paid,   \n4,paid,Karachi\n")
+    profile = profiling.full_profile(df)
+    health = profile["health"]
+    assert profile["stats"]["completeness"] == 100.0  # no truly empty cell…
+    assert health["looks_empty_cells"] == 3  # …but 2 placeholders and 1 space-only cell
+    assert health["real_completeness"] == round(9 / 12 * 100, 2)
+    assert health["needs_cleaning"] is True
+    cols = {c["name"]: c for c in profile["columns"]}
+    assert cols["status"]["looks_empty"] == 2 and cols["status"]["completeness"] == 50.0
+    assert cols["city"]["looks_empty"] == 1 and cols["city"]["issues"] >= 2  # spaces + blank
+    assert cols["id"]["issues"] == 0 and cols["id"]["completeness"] == 100.0
+    assert health["columns_with_issues"] == 2 and health["issues"] == 3 and health["notes"] == 0
+
+
+def test_health_of_clean_data(frame):
+    profile = profiling.full_profile(frame("id,name\n1,Ali\n2,Sara\n"))
+    assert profile["health"] == {**profile["health"], "looks_empty_cells": 0, "real_completeness": 100.0,
+                                 "needs_cleaning": False}
