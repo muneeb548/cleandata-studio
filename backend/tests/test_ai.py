@@ -320,3 +320,33 @@ def test_unreadable_answer_is_an_error():
     with pytest.raises(ai_client.AppError) as err:
         ai_client._parse("Sure! Here is your plan")
     assert err.value.code == "ai_bad_answer"
+
+
+# ----------------------------------------------------------------- chat with your data
+
+ASK_PLAN = {"possible": True, "reply": "", "description": "Customers per city", "filters": [], "group_by": ["city"],
+            "metric": "count_rows", "metric_column": "", "sort": "desc", "limit": 20}
+
+
+def test_ask_computes_the_answer_from_the_data(use_ai):
+    fake = use_ai(ASK_PLAN)
+    headers = upload()
+    r = client.post("/api/ai/ask", json={"question": "kis city mein sab se zyada customers hain?"}, headers=headers)
+    assert r.status_code == 200, r.text
+    data = R.AiAnswer.model_validate(r.json())
+    assert data.possible and data.rows[0] == ["lahore", 2]
+    assert data.answer == "Customers per city: lahore (2)" and data.steps[0] == "Group by city"
+    assert "kis city" in fake.calls[0]["prompt"]
+    assert client.get("/api/session", headers=headers).json()["history"] == []  # nothing changed
+
+
+def test_ask_when_the_table_cannot_answer(use_ai):
+    use_ai({**ASK_PLAN, "possible": False, "reply": "There is no sales column."})
+    data = client.post("/api/ai/ask", json={"question": "what will sales be next year?"}, headers=upload()).json()
+    assert data["possible"] is False and data["answer"] == "There is no sales column." and data["rows"] == []
+
+
+def test_ask_refuses_a_plan_with_unknown_columns(use_ai):
+    use_ai({**ASK_PLAN, "group_by": ["salary"]})
+    r = client.post("/api/ai/ask", json={"question": "salary per city"}, headers=upload())
+    assert r.status_code == 422 and r.json()["error"]["code"] == "ai_bad_plan"

@@ -25,3 +25,10 @@ describe("mergeSuggestions", () => {
     expect(AI_EXAMPLES.length).toBeGreaterThan(0);
   });
 });
+
+describe("QUESTION_EXAMPLES", () => {
+  it("are long enough to be sent", async () => {
+    const { QUESTION_EXAMPLES } = await import("./Ai");
+    expect(QUESTION_EXAMPLES.every((q) => q.trim().length >= 3)).toBe(true);
+  });
+});

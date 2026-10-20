@@ -19,7 +19,7 @@ CleanData Studio is a web application for cleaning messy tabular data without wr
 - **Data quality overview** — rows, columns, missing cells, duplicate rows, columns with missing values, completeness %, missing-by-column chart, column type distribution, per-column completeness, and a list of detected issues with one-click "Fix".
 - **Issue detection** — duplicates, empty rows/columns, missing values, extra spaces, space-only cells, placeholders such as `N/A`/`null`, mixed types, dates stored as text and mixed date formats (with a day-first / month-first hint), inconsistent capitalisation, untidy or invalid email addresses, phone numbers without a country code, country names written in different ways, amounts stored as text (`$1,250.00`, `Rs 1,25,000`), column names with spaces, IQR outliers.
 - **⚡ Quick Clean** — proposes every fix that keeps the meaning of the data (exact duplicates when an ID column makes it safe, spaces, placeholders, one spelling per value, emails, country names, phone numbers using each row's country, dates), previews them together and applies them as separate, undoable steps. Missing values, outliers and ambiguous dates are listed for a human decision, never changed.
-- **✨ AI assistant (optional, off by default)** — *Ask AI*: describe the cleaning in your own words (English, Urdu, Roman Urdu…) and get a plan made of the app's own operations; *Suggest with AI* fills the Map values table (`Lhr`, `LAHORE` → `Lahore`); *AI summary* writes a plain-language report in the client's language. Runs on a free local model through [Ollama](https://ollama.com) (data never leaves the computer) or on the Claude API (cloud, asks for consent first). See [AI assistant](#ai-assistant).
+- **✨ AI assistant (optional, off by default)** — *Ask AI*: describe the cleaning in your own words (English, Urdu, Roman Urdu…) and get a plan made of the app's own operations; *Suggest with AI* fills the Map values table (`Lhr`, `LAHORE` → `Lahore`); *AI summary* writes a plain-language report in the client's language; *Ask a question* answers questions about the data ("which city has the most customers?") with numbers calculated by the app, not by the AI. Runs on a free local model through [Ollama](https://ollama.com) (data never leaves the computer) or on the Claude API (cloud, asks for consent first). See [AI assistant](#ai-assistant).
 - **Data preview** — paginated (50/100/200 rows), search across all columns, numeric-aware sorting, inferred types, missing values clearly labelled, original vs working data toggle.
 - **Cleaning operations** (all previewable before applying):
   - Remove duplicate rows (keep first / last)
@@ -269,10 +269,13 @@ All endpoints except health/config/upload/operations catalog require the header 
 | POST | `/api/ai/plan` | Plain-language request → validated cleaning steps (nothing is changed) |
 | POST | `/api/ai/map-values` | Suggested value mapping for one column |
 | POST | `/api/ai/summary` | Plain-language report of the cleaning |
+| POST | `/api/ai/ask` | Answer a question about the data (the AI writes a query plan, the app computes it) |
 
 ## AI assistant
 
-The AI is **off by default**; the app works fully without it. It has three features: **Ask AI** (Overview page), **Suggest with AI** (Map values form) and **AI summary** (Download page).
+The AI is **off by default**; the app works fully without it. It has four features: **Ask AI** and **Ask a question** (Overview page), **Suggest with AI** (Map values form) and **AI summary** (Download page).
+
+For questions, the AI only fills in a small query plan (filters, up to two group-by columns, one calculation such as count, sum or average). The app checks that every column exists and calculates the result with pandas, then shows the table and the steps used, so no number in an answer is invented by the model.
 
 **How it stays safe.** The model never runs code and never receives the whole file. It gets a short description (column names, types, counts and, unless `AI_SEND_VALUES=false`, up to 20 example values per column) and must answer with JSON that matches a fixed schema. Every proposed step is checked with the same validation as the normal API, must use real columns, and is tried on a sample first; anything else is dropped and shown as "left out by the safety check". Nothing changes until you preview and press Apply, and each step can be undone. Prompts and answers are not logged.
 
@@ -362,7 +365,7 @@ In the browser test (Chromium), uploading and analysing the 99.7 MB CSV took abo
 
 ## Future improvements
 
-Faster Excel reading (e.g. the optional `python-calamine` engine), Arrow-backed strings to cut memory use, "chat with your data" questions answered by the AI as safe, validated queries, automated profiling reports, saved projects and user accounts, cloud storage, team collaboration, custom validation rules, scheduled cleaning jobs, data pipeline integrations, and a blog with guides (for example "How to Clean CSV Files" and "How to Handle Missing Values"). New public pages can be added in `frontend/src/App.tsx`, `PUBLIC_PAGES` in `frontend/seo-plugin.ts` (sitemap) and `SPA_ROUTES` in `backend/app/web.py`.
+Faster Excel reading (e.g. the optional `python-calamine` engine), Arrow-backed strings to cut memory use, automated profiling reports, saved projects and user accounts, cloud storage, team collaboration, custom validation rules, scheduled cleaning jobs, data pipeline integrations, and a blog with guides (for example "How to Clean CSV Files" and "How to Handle Missing Values"). New public pages can be added in `frontend/src/App.tsx`, `PUBLIC_PAGES` in `frontend/seo-plugin.ts` (sitemap) and `SPA_ROUTES` in `backend/app/web.py`.
 
 ## Deployment
 

@@ -371,3 +371,25 @@ def summary(session: Session, language: str = "English", consent: bool = False) 
         raise AppError("ai_bad_answer", "The AI did not write a summary.", "Try again.", status=502)
     return {"summary": text[:5000], "shared": "The change report: row and column counts and the list of applied steps.",
             "provider": ai_client.provider_info().label}
+
+
+# --------------------------------------------------------------------------- 4. questions about the data
+
+def ask(session: Session, question: str, consent: bool = False) -> dict:
+    """Answer a question with a query plan from the model, computed by the app on the real data."""
+    from app.services import ask as query
+
+    client = _start(session, consent)
+    values = settings.ai_send_values
+    prompt = f"Data description:\n{describe_data(session, values)}\n\nQuestion:\n{question}"
+    raw = client.complete_json(query.SYSTEM, prompt, query.PLAN_SCHEMA, max_tokens=800)
+    base = {"question": question, "shared": _shared_text(values), "provider": ai_client.provider_info().label}
+    if not raw.get("possible", True):
+        reply = str(raw.get("reply") or "This question cannot be answered from the table.")[:1000]
+        return {**base, "possible": False, "answer": reply, "description": "", "steps": [], "columns": [], "rows": [],
+                "total_groups": 0, "rows_matched": 0, "notes": []}
+    with session.lock:
+        df = session.current
+        plan = query.check_plan(df, raw)
+        result = query.run(df, plan)
+    return {**base, "possible": True, "description": plan["description"], "steps": query.explain(plan), **result}

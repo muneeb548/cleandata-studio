@@ -1,4 +1,5 @@
 import type {
+  AiAnswer,
   AiMappings,
   AiPlan,
   AiStatus,
@@ -232,6 +233,8 @@ export const api = {
     request<AiPlan>("/api/ai/plan", { method: "POST", body: JSON.stringify({ request: text, consent }) }, AI_TIMEOUT_MS),
   aiMapValues: (column: string, consent: boolean) =>
     request<AiMappings>("/api/ai/map-values", { method: "POST", body: JSON.stringify({ column, consent }) }, AI_TIMEOUT_MS),
+  aiAsk: (question: string, consent: boolean) =>
+    request<AiAnswer>("/api/ai/ask", { method: "POST", body: JSON.stringify({ question, consent }) }, AI_TIMEOUT_MS),
   aiSummary: (language: string, consent: boolean) =>
     request<AiSummary>("/api/ai/summary", { method: "POST", body: JSON.stringify({ language, consent }) }, AI_TIMEOUT_MS),
   preview: (operation: Operation) =>

@@ -80,7 +80,7 @@ def test_openapi_documents_every_endpoint():
         "/api/export": {"get"}, "/api/health": {"get"}, "/api/config": {"get"}, "/api/values": {"get"},
         "/api/quick-clean/plan": {"get"}, "/api/quick-clean/preview": {"post"}, "/api/quick-clean/apply": {"post"},
         "/api/report": {"get"}, "/api/recipe": {"get"},
-        "/api/ai/status": {"get"}, "/api/ai/plan": {"post"}, "/api/ai/map-values": {"post"}, "/api/ai/summary": {"post"},
+        "/api/ai/status": {"get"}, "/api/ai/plan": {"post"}, "/api/ai/map-values": {"post"}, "/api/ai/summary": {"post"}, "/api/ai/ask": {"post"},
     }
     for path, methods in expected.items():
         assert methods <= set(paths[path]), path

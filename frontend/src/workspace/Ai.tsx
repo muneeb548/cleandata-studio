@@ -1,16 +1,18 @@
 import { useEffect, useState } from "react";
-import { Check, ClipboardCopy, Eye, Lock, Cloud, Sparkles, X } from "lucide-react";
+import { Check, ClipboardCopy, Cloud, Eye, Lock, MessageSquare, Send, Sparkles, X } from "lucide-react";
 import { ApiError, SESSION_GONE, api } from "@/api/client";
-import type { AiPlan, AiStatus, QuickCleanPreview } from "@/api/types";
+import type { AiAnswer, AiPlan, AiStatus, QuickCleanPreview } from "@/api/types";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Checkbox, FieldHint, Label, Select } from "@/components/ui/form";
+import { Table, TD, TH, THead, TR } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import { formatNumber, pluralize } from "@/lib/utils";
 import { stepDetail, stepLabel } from "./Recipes";
+import { Cell } from "./shared";
 import { toApiError } from "./useAsync";
 import { useWorkspace } from "./WorkspaceContext";
 
@@ -414,5 +416,180 @@ export function AiSummaryCard() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** Example questions shown in the chat (clicking one asks it). */
+export const QUESTION_EXAMPLES = [
+  "Which city has the most rows?",
+  "How many emails are missing?",
+  "Har country ka total amount kitna hai?",
+];
+
+type ChatEntry = { question: string; result?: AiAnswer; error?: ApiError };
+
+/** Overview page: ask questions about the data. The AI writes a query plan, the app calculates the answer. */
+export function ChatWithDataButton() {
+  const status = useAiStatus();
+  const { handleError, version } = useWorkspace();
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [consent, setConsent] = useState(false);
+  const [entries, setEntries] = useState<ChatEntry[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setEntries([]), [version]);
+  if (!status) return null;
+
+  const ask = async (question: string) => {
+    const q = question.trim();
+    if (q.length < 3 || busy) return;
+    setBusy(true);
+    setText("");
+    setEntries((prev) => [...prev, { question: q }]);
+    let entry: ChatEntry;
+    try {
+      entry = { question: q, result: await api.aiAsk(q, consent) };
+    } catch (err) {
+      const e = toApiError(err);
+      if (SESSION_GONE.has(e.code)) {
+        setOpen(false);
+        handleError(e);
+        setBusy(false);
+        return;
+      }
+      entry = { question: q, error: e };
+    }
+    setEntries((prev) => [...prev.slice(0, -1), entry]);
+    setBusy(false);
+  };
+
+  const ready = canAsk(status, consent);
+
+  return (
+    <>
+      <Button variant="secondary" onClick={() => setOpen(true)}>
+        <MessageSquare /> Ask a question
+      </Button>
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        className="max-h-[90vh] max-w-3xl overflow-y-auto"
+        title="Ask about your data"
+        description="Ask in any language. The AI only decides what to calculate; the app does the calculation on your data, so every number is real. Nothing is changed."
+      >
+        <div className="space-y-4">
+          {!status.ready && status.problem && (
+            <Alert tone="warning" title="The AI is not ready">
+              {status.problem}
+            </Alert>
+          )}
+          <AiPrivacyNote status={status} consent={consent} onConsent={setConsent} id="ai-ask-consent" />
+
+          {entries.length === 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {QUESTION_EXAMPLES.map((ex) => (
+                <button key={ex} type="button" disabled={!ready} onClick={() => void ask(ex)} className="rounded-full border border-border px-2.5 py-0.5 text-caption text-slate-600 hover:bg-muted disabled:opacity-50">
+                  {ex}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <ol className="space-y-4" aria-live="polite">
+            {entries.map((e, i) => (
+              <li key={i} className="space-y-2">
+                <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-primary-soft px-3 py-2 text-body text-blue-900">{e.question}</p>
+                {!e.result && !e.error && <FieldHint>Thinking… {status.local ? "a local AI can take a minute or two." : ""}</FieldHint>}
+                {e.error && (
+                  <Alert tone="danger" title={e.error.message}>
+                    {e.error.hint}
+                  </Alert>
+                )}
+                {e.result && <AnswerCard result={e.result} />}
+              </li>
+            ))}
+          </ol>
+
+          <form
+            className="flex items-end gap-2"
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              void ask(text);
+            }}
+          >
+            <div className="flex-1 space-y-1.5">
+              <Label htmlFor="ai-question">Your question</Label>
+              <input
+                id="ai-question"
+                value={text}
+                maxLength={1000}
+                onChange={(ev) => setText(ev.target.value)}
+                placeholder="e.g. kis city mein sab se zyada customers hain?"
+                className="h-9 w-full rounded-md border border-border-strong px-3 text-body focus-visible:border-primary"
+              />
+            </div>
+            <Button type="submit" loading={busy} disabled={text.trim().length < 3 || !ready}>
+              {!busy && <Send />} Ask
+            </Button>
+          </form>
+        </div>
+      </Dialog>
+    </>
+  );
+}
+
+function AnswerCard({ result }: { result: AiAnswer }) {
+  if (!result.possible) {
+    return (
+      <Alert tone="info" title="This table cannot answer that">
+        {result.answer}
+      </Alert>
+    );
+  }
+  const single = result.rows.length === 1 && result.columns.length === 1;
+  return (
+    <div className="space-y-2 rounded-lg border border-border p-3">
+      <p className="text-body font-medium text-foreground">{result.answer}</p>
+      {!single && result.rows.length > 0 && (
+        <div className="scroll-thin max-h-72 overflow-auto rounded-md border border-border">
+          <Table>
+            <THead>
+              <tr>
+                {result.columns.map((c, i) => (
+                  <TH key={c + i} scope="col" className={i === result.columns.length - 1 ? "pr-3 text-right" : "pl-3"}>
+                    {c}
+                  </TH>
+                ))}
+              </tr>
+            </THead>
+            <tbody>
+              {result.rows.map((row, r) => (
+                <TR key={r}>
+                  {row.map((v, i) => (
+                    <TD key={i} className={i === row.length - 1 ? "tabular pr-3 text-right" : "pl-3"}>
+                      {typeof v === "number" ? formatNumber(v) : <Cell value={v} />}
+                    </TD>
+                  ))}
+                </TR>
+              ))}
+            </tbody>
+          </Table>
+        </div>
+      )}
+      {result.notes.map((n) => (
+        <p key={n} className="text-caption text-amber-800">
+          {n}
+        </p>
+      ))}
+      <details className="text-caption text-muted-foreground">
+        <summary className="cursor-pointer">How this was calculated ({formatNumber(result.rows_matched)} rows used)</summary>
+        <ol className="mt-1 list-decimal space-y-0.5 pl-5">
+          {result.steps.map((s) => (
+            <li key={s}>{s}</li>
+          ))}
+        </ol>
+      </details>
+    </div>
   );
 }

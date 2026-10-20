@@ -409,3 +409,21 @@ export interface AiSummary {
   shared: string;
   provider: string;
 }
+
+export interface AiAnswer {
+  question: string;
+  /** false when the table cannot answer the question */
+  possible: boolean;
+  /** one-line answer built by the app from the calculated result */
+  answer: string;
+  description: string;
+  /** how the result was calculated, in plain words */
+  steps: string[];
+  columns: string[];
+  rows: CellValue[][];
+  total_groups: number;
+  rows_matched: number;
+  notes: string[];
+  shared: string;
+  provider: string;
+}

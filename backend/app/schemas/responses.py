@@ -447,3 +447,18 @@ class AiSummary(_Model):
     summary: str
     shared: str
     provider: str
+
+
+class AiAnswer(_Model):
+    question: str
+    possible: bool = Field(description="False when the AI says the table cannot answer the question.")
+    answer: str = Field(description="One-line answer built by the app from the calculated result.")
+    description: str
+    steps: list[str] = Field(description="How the result was calculated, in plain words.")
+    columns: list[str]
+    rows: list[list[Cell]] = Field(description="The calculated result (at most 100 rows).")
+    total_groups: int
+    rows_matched: int = Field(description="Rows that passed the filters.")
+    notes: list[str]
+    shared: str
+    provider: str

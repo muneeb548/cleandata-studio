@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.api.deps import SESSION_ERRORS, SessionDep
-from app.schemas.responses import AiMappings, AiPlan, AiStatus, AiSummary, ErrorResponse
+from app.schemas.responses import AiAnswer, AiMappings, AiPlan, AiStatus, AiSummary, ErrorResponse
 from app.services import ai
 
 router = APIRouter(prefix="/ai", tags=["ai assistant"])
@@ -35,6 +35,10 @@ class MappingRequest(_Body):
     column: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
 
 
+class AskRequest(_Body):
+    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=1000)]
+
+
 class SummaryRequest(_Body):
     language: Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=40)] = "English"
 
@@ -59,3 +63,11 @@ def map_values(body: MappingRequest, session: SessionDep) -> dict:
 @router.post("/summary", response_model=AiSummary, summary="Plain-language report of the cleaning", responses=AI_ERRORS)
 def summary(body: SummaryRequest, session: SessionDep) -> dict:
     return ai.summary(session, body.language, body.consent)
+
+
+@router.post("/ask", response_model=AiAnswer, summary="Answer a question about the data", responses={
+    **AI_ERRORS, 422: {"model": ErrorResponse, "description": "The AI's query plan could not be used."}})
+def ask(body: AskRequest, session: SessionDep) -> dict:
+    """The AI writes a small query plan (filters, grouping, calculation); the app checks it and computes
+    the answer with pandas, so every number comes from the data. Nothing is changed."""
+    return ai.ask(session, body.question, body.consent)
