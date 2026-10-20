@@ -91,6 +91,9 @@ class Settings:
     max_concurrent_uploads: int = field(default_factory=lambda: _int("MAX_CONCURRENT_UPLOADS", 0))
     # Folder with the built frontend (frontend/dist). When set, the API server also serves the website.
     frontend_dist: str = field(default_factory=lambda: os.getenv("FRONTEND_DIST", "").strip())
+    # How text is kept in memory: auto (pyarrow when installed: several times less memory),
+    # pyarrow, or python (one Python object per cell; the old behaviour).
+    string_storage: str = field(default_factory=lambda: os.getenv("STRING_STORAGE", "auto").strip().lower() or "auto")
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO")
     # --- AI assistant (optional, off by default) ---
     # off: no AI. ollama: a model running on this computer (free, data stays here).
@@ -121,6 +124,8 @@ class Settings:
         issues = []
         if self.environment not in ("development", "production"):
             issues.append(f"ENVIRONMENT must be 'development' or 'production', not '{self.environment}'.")
+        if self.string_storage not in ("auto", "pyarrow", "python"):
+            issues.append(f"STRING_STORAGE must be auto, pyarrow or python, not '{self.string_storage}'.")
         if self.ai_provider not in ("off", "ollama", "anthropic"):
             issues.append(f"AI_PROVIDER must be off, ollama or anthropic, not '{self.ai_provider}'.")
         if self.ai_provider == "anthropic" and not self.anthropic_api_key:

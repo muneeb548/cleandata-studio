@@ -454,7 +454,10 @@ def find_replace(df: pd.DataFrame, op: FindReplace) -> OpResult:
             replacement = pd.NA if op.replace == "" else op.replace
             out[c] = s.mask(hits, replacement)
         else:
-            replaced = s.str.replace(re.escape(op.find), op.replace.replace("\\", "\\\\"), regex=True, flags=flags)
+            if op.case_sensitive:  # plain text replace: same result for every storage type
+                replaced = s.str.replace(op.find, op.replace, regex=False)
+            else:
+                replaced = s.str.replace(re.escape(op.find), op.replace.replace("\\", "\\\\"), regex=True, flags=flags)
             out[c] = replaced.mask((replaced == "").fillna(False), pd.NA)
     changed, _ = count_changed_cells(df, out, columns=cols)
     if not changed:

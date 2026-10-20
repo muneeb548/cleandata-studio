@@ -26,12 +26,35 @@ from typing import BinaryIO
 
 import pandas as pd
 
+from app.core.config import settings
 from app.core.errors import AppError
 
 # A single cell may legitimately be large; never let the csv module reject it.
 csv.field_size_limit(2**31 - 1)
 
-STRING_DTYPE = pd.StringDtype("python")
+
+def _string_dtype() -> pd.StringDtype:
+    """How text cells are stored in memory (STRING_STORAGE in backend/.env).
+
+    "pyarrow" keeps a column's text in one compact Apache Arrow buffer and uses several
+    times less memory than "python" (one Python object per cell), which is what makes
+    large files fit on a laptop. "auto" (default) uses pyarrow when it is installed.
+    """
+    choice = settings.string_storage
+    if choice != "python":
+        try:
+            import pyarrow  # noqa: F401
+
+            return pd.StringDtype("pyarrow")
+        except ImportError:
+            pass
+    return pd.StringDtype("python")
+
+
+STRING_DTYPE = _string_dtype()
+# Rows parsed at a time. Each chunk is converted to compact storage before the next is
+# read, so a large file never exists as millions of Python objects at once.
+CSV_CHUNK_ROWS = 200_000
 CANDIDATE_DELIMITERS = [",", ";", "\t", "|"]
 DELIMITER_NAMES = {",": "comma", ";": "semicolon", "\t": "tab", "|": "pipe"}
 READ_CHUNK = 1024 * 1024
@@ -218,7 +241,7 @@ def load_delimited(f: BinaryIO, *, delimiter: str | None = None, fmt: str = "csv
 
     f.seek(0)
     try:
-        df = pd.read_csv(
+        reader = pd.read_csv(
             f,
             sep=delimiter,
             header=None,
@@ -231,7 +254,15 @@ def load_delimited(f: BinaryIO, *, delimiter: str | None = None, fmt: str = "csv
             engine="c",
             quotechar='"',
             doublequote=True,
+            chunksize=CSV_CHUNK_ROWS,
         )
+        with reader:
+            chunks = list(reader)
+        if not chunks:
+            df = pd.DataFrame({i: pd.array([], dtype=STRING_DTYPE) for i in range(widest)})
+        else:
+            df = chunks[0] if len(chunks) == 1 else pd.concat(chunks, ignore_index=True)
+        del chunks
     except (pd.errors.ParserError, ValueError, UnicodeDecodeError) as exc:
         raise AppError("malformed_csv", "The file could not be parsed as delimited text.",
                        "Check for unbalanced quotation marks or mixed separators, then export again.") from exc

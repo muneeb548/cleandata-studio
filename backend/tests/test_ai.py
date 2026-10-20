@@ -71,7 +71,11 @@ def step(operation: str, **settings_) -> dict:
 
 # ----------------------------------------------------------------- status
 
-def test_status_when_off():
+def test_status_when_off(monkeypatch):
+    # Independent of backend/.env on the developer's computer.
+    off = dataclasses.replace(settings, ai_provider="off")
+    monkeypatch.setattr(ai, "settings", off)
+    monkeypatch.setattr(ai_client, "settings", off)
     data = R.AiStatus.model_validate(client.get("/api/ai/status").json())
     assert data.enabled is False and data.provider == "off" and data.ready is False
 
@@ -93,7 +97,10 @@ def test_status_cloud_needs_consent(monkeypatch):
     assert data == {**data, "local": False, "needs_consent": True, "ready": True, "model": "claude-haiku-5-5"}
 
 
-def test_requests_fail_clearly_when_ai_is_off():
+def test_requests_fail_clearly_when_ai_is_off(monkeypatch):
+    off = dataclasses.replace(settings, ai_provider="off")
+    monkeypatch.setattr(ai, "settings", off)
+    monkeypatch.setattr(ai_client, "settings", off)
     headers = upload()
     r = client.post("/api/ai/plan", json={"request": "remove duplicates"}, headers=headers)
     assert r.status_code == 503 and r.json()["error"]["code"] == "ai_unavailable"

@@ -13,8 +13,25 @@ import pandas as pd
 SAMPLE_ROWS = 5000
 
 
+def _arrow_buffers(arr) -> frozenset[int] | None:
+    """Addresses of the memory blocks behind an Arrow-backed column (text with pyarrow storage)."""
+    chunked = getattr(arr, "_pa_array", None)
+    if chunked is None or not hasattr(chunked, "chunks"):
+        return None
+    addresses = set()
+    for chunk in chunked.chunks:
+        for buf in chunk.buffers():
+            if buf is not None and buf.size:
+                addresses.add(buf.address)
+    return frozenset(addresses)
+
+
 def _buffer(s: pd.Series):
+    """What identifies the column's memory: a numpy array, or a set of Arrow buffer addresses."""
     arr = s.array
+    arrow = _arrow_buffers(arr)
+    if arrow is not None:
+        return arrow
     for attr in ("_ndarray", "_data"):
         buf = getattr(arr, attr, None)
         if isinstance(buf, np.ndarray):
@@ -23,6 +40,12 @@ def _buffer(s: pd.Series):
         return s.to_numpy(copy=False)
     except (TypeError, ValueError):
         return None
+
+
+def _shares(buf, previous: list) -> bool:
+    if isinstance(buf, frozenset):
+        return any(isinstance(p, frozenset) and buf & p for p in previous)
+    return any(isinstance(p, np.ndarray) and np.may_share_memory(buf, p) for p in previous)
 
 
 def column_bytes(s: pd.Series) -> int:
@@ -48,7 +71,7 @@ def new_bytes(df: pd.DataFrame, previous: pd.DataFrame | None) -> int:
     for i in range(df.shape[1]):
         col = df.iloc[:, i]
         buf = _buffer(col)
-        if buf is not None and any(np.may_share_memory(buf, pb) for pb in prev_bufs):
+        if buf is not None and _shares(buf, prev_bufs):
             continue
         total += column_bytes(col)
     return total

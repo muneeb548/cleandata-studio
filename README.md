@@ -319,6 +319,20 @@ Sessions are stored in the memory of **one Python process**. This keeps uploaded
 - **Memory is the capacity limit.** Every session holds its original data, the working data and undo snapshots. `MAX_SESSIONS` (default 10) and `MAX_HISTORY_MEMORY_MB` bound this; the least recently used session is removed when the limit is reached.
 - **Scaling out** would require moving datasets to shared storage (e.g. Parquet files in object storage or a Redis/DB-backed store) and keying sessions there; this is a listed future improvement.
 
+## Big file mode
+
+Text cells are stored with Apache Arrow (`pyarrow`, installed from `requirements.txt`) instead of one Python object per cell, and CSV files are parsed in chunks of 200,000 rows that are converted before the next chunk is read. Both cut the memory a large file needs. Undo snapshots share every unchanged column, also with Arrow storage. Set `STRING_STORAGE=python` in `backend/.env` to go back to the old storage.
+
+Measure how much memory a file size needs on your computer (run in `backend` with the virtual environment active):
+
+```powershell
+python scripts/measure_memory.py 300                                   # Arrow storage (default)
+$env:STRING_STORAGE="python"; python scripts/measure_memory.py 100     # old storage, for comparison
+Remove-Item Env:STRING_STORAGE
+```
+
+Choose `MAX_UPLOAD_MB` so that the reported peak memory stays well below your free RAM.
+
 ## Measured large-file performance
 
 Measured on a Linux machine with 2 CPU cores and 8 GB RAM (your laptop may be faster or slower). These are **real** runs on generated files, not simulations:
@@ -334,7 +348,7 @@ In the browser test (Chromium), uploading and analysing the 99.7 MB CSV took abo
 
 ## Known limitations
 
-- **Memory:** a 100 MB CSV becomes roughly 0.5 GB in memory (all values kept as text). Each session also keeps the original data plus undo steps (within `MAX_HISTORY_MEMORY_MB`). On a laptop with 8 GB RAM, work with one large file at a time. If memory runs out, Python may report an error (shown as "not enough memory") or Windows may slow down heavily.
+- **Memory:** with the old `STRING_STORAGE=python` mode a 100 MB CSV becomes roughly 0.5 GB in memory (all values kept as text). The default mode stores text with Apache Arrow (`pyarrow`), which needs several times less; measure your own machine with `python scripts/measure_memory.py 300` (see *Big file mode*). Each session also keeps the original data plus undo steps (within `MAX_HISTORY_MEMORY_MB`). On a laptop with 8 GB RAM, work with one large file at a time. If memory runs out, Python may report an error (shown as "not enough memory") or Windows may slow down heavily.
 - **Excel import is slow** (openpyxl reads roughly 80–100 thousand cells per second here): a full-size sheet (1M rows × 8 columns) can take 1–2 minutes. Formulas are imported as their last saved values; password-protected workbooks are not supported. Only one sheet is loaded per upload.
 - **Legacy .xls** support uses `xlrd`; it is implemented but was **not tested with a real .xls file** in development (only the error paths were tested), because no .xls generator was available. Please try one of your own `.xls` files.
 - **Excel export** is limited by Excel itself to 1,048,575 data rows and 16,384 columns and is slower than CSV (~1 minute for a full sheet). Larger results must be downloaded as CSV.
