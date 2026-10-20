@@ -83,7 +83,18 @@ def test_format_override(tmp_path):
 
 # ----------------------------------------------------------------- Excel
 
-def test_xlsx_import_keeps_types(tmp_path):
+@pytest.fixture(params=["calamine", "openpyxl"])
+def reader(request, monkeypatch):
+    """Run each Excel test with the fast reader (python-calamine) and with openpyxl: results must match."""
+    if request.param == "calamine":
+        pytest.importorskip("python_calamine")
+        monkeypatch.setenv("EXCEL_READER", "auto")
+    else:
+        monkeypatch.setenv("EXCEL_READER", "openpyxl")
+    return request.param
+
+
+def test_xlsx_import_keeps_types(tmp_path, reader):
     res = load_file(make_xlsx(tmp_path), "data.xlsx")
     df = res.df
     assert res.format == "xlsx" and res.sheet == "Customers"
@@ -97,7 +108,7 @@ def test_xlsx_import_keeps_types(tmp_path):
     assert df.loc[1, "Name"] == " Sara "  # text kept exactly
 
 
-def test_xlsx_sheet_selection(tmp_path):
+def test_xlsx_sheet_selection(tmp_path, reader):
     p = make_xlsx(tmp_path, sheets={"First": [["a"], [1]], "Second": [["b"], ["x"], ["y"]]})
     res = load_file(p, "data.xlsx")
     assert res.sheet == "First" and res.sheets == ["First", "Second"]
@@ -109,14 +120,14 @@ def test_xlsx_sheet_selection(tmp_path):
     assert exc.value.code == "unknown_sheet"
 
 
-def test_xlsx_empty_sheet(tmp_path):
+def test_xlsx_empty_sheet(tmp_path, reader):
     p = make_xlsx(tmp_path, sheets={"Empty": []})
     with pytest.raises(AppError) as exc:
         load_file(p, "data.xlsx")
     assert exc.value.code == "empty_file"
 
 
-def test_corrupted_xlsx(tmp_path):
+def test_corrupted_xlsx(tmp_path, reader):
     p = write(tmp_path, "broken.xlsx", b"PK\x03\x04this is not really a workbook")
     with pytest.raises(AppError) as exc:
         load_file(p, "broken.xlsx")

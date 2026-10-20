@@ -68,6 +68,7 @@ def test_xlsx_requires_defusedxml(tmp_path, monkeypatch):
     wb.active.append(["a"])
     wb.save(path)
     monkeypatch.setattr(openpyxl.xml, "DEFUSEDXML", False)
+    monkeypatch.setenv("EXCEL_READER", "openpyxl")  # python-calamine does not use XML entity processing
     from app.services import importers
 
     with pytest.raises(AppError) as exc:

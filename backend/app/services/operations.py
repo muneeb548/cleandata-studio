@@ -949,7 +949,38 @@ def map_values(df: pd.DataFrame, op: MapValues) -> OpResult:
 # --------------------------------------------------------------------------- near duplicates
 
 SIMILAR_RATIO = 0.9
-MAX_BLOCK = 3000  # keys compared pairwise in one block; larger blocks are skipped (reported)
+MAX_BLOCK = 500  # keys compared pairwise in one block; larger blocks use the neighbourhood method
+NEIGHBOURS = 15  # large blocks: each key is compared with this many neighbours in sorted order
+
+try:  # C++ string matching, 10-100x faster than difflib (pip package "rapidfuzz")
+    from rapidfuzz.fuzz import ratio as _fast_ratio
+except ImportError:  # pragma: no cover - the app still works, only slower
+    _fast_ratio = None
+
+
+def _alike(a: str, b: str) -> bool:
+    """True when two keys are at least SIMILAR_RATIO alike."""
+    if _fast_ratio is not None:
+        return _fast_ratio(a, b, score_cutoff=SIMILAR_RATIO * 100) > 0
+    matcher = difflib.SequenceMatcher(None, a, b)
+    return matcher.quick_ratio() >= SIMILAR_RATIO and matcher.ratio() >= SIMILAR_RATIO
+
+
+def _neighbour_pairs(keys: list[str]):
+    """Pairs worth comparing in a large block (sorted neighbourhood method).
+
+    Keys are sorted twice, once as written and once by their reversed text, and each key is
+    paired with the next NEIGHBOURS keys. Spelling variants sort close together ("jon smith",
+    "john smith"), and the reversed order catches mistakes in the first letters. The number of
+    comparisons grows with the number of keys, not with its square, so a million keys take
+    seconds instead of hours.
+    """
+    for ordered in (sorted(keys), sorted(keys, key=lambda k: k[::-1])):
+        n = len(ordered)
+        for i in range(n):
+            a = ordered[i]
+            for j in range(i + 1, min(i + 1 + NEIGHBOURS, n)):
+                yield a, ordered[j]
 
 
 def _record_key(value: object) -> str:
@@ -961,7 +992,8 @@ def _record_key(value: object) -> str:
 
 
 def near_duplicate_groups(df: pd.DataFrame, columns: list[str], similar: bool) -> tuple[list[list], int]:
-    """Groups of row labels (2+ rows each) that describe the same record, and how many keys were too many to compare."""
+    """Groups of row labels (2+ rows each) that describe the same record, and how many keys were compared
+    with their neighbours only (large files) instead of with every other key."""
     parts = [_canon(df[c]).tolist() for c in columns]
     keys = ["|".join(_record_key(p[i]) for p in parts) for i in range(len(df))]
     rows_by_key: dict[str, list] = {}
@@ -976,22 +1008,27 @@ def near_duplicate_groups(df: pd.DataFrame, columns: list[str], similar: bool) -
             k = parent[k]
         return k
 
-    skipped = 0
+    approximate = 0
     if similar:
         blocks: dict[str, list[str]] = {}
         for key in rows_by_key:
             blocks.setdefault(key.replace("|", "")[:1], []).append(key)
         for block in blocks.values():
             if len(block) > MAX_BLOCK:
-                skipped += len(block)
+                approximate += len(block)
+                for a, b in _neighbour_pairs(block):
+                    la, lb = len(a), len(b)
+                    if lb > la / SIMILAR_RATIO + 2 or la > lb / SIMILAR_RATIO + 2:
+                        continue  # lengths too different to be 90% alike
+                    if find(a) != find(b) and _alike(a, b):
+                        parent[find(b)] = find(a)
                 continue
             block.sort(key=len)
             for i, a in enumerate(block):
                 for b in block[i + 1:]:
                     if len(b) > len(a) / SIMILAR_RATIO + 2:
                         break  # sorted by length: later keys are too long to be 90% alike
-                    matcher = difflib.SequenceMatcher(None, a, b)
-                    if matcher.quick_ratio() >= SIMILAR_RATIO and matcher.ratio() >= SIMILAR_RATIO:
+                    if _alike(a, b):
                         parent[find(b)] = find(a)
     groups: dict[str, list] = {}
     for key, labels in rows_by_key.items():
@@ -999,7 +1036,7 @@ def near_duplicate_groups(df: pd.DataFrame, columns: list[str], similar: bool) -
     order = {label: i for i, label in enumerate(df.index.tolist())}
     result = [sorted(g, key=order.__getitem__) for g in groups.values() if len(g) > 1]
     result.sort(key=lambda g: order[g[0]])
-    return result, skipped
+    return result, approximate
 
 
 def near_duplicates(df: pd.DataFrame, op: NearDuplicates) -> OpResult:
@@ -1007,11 +1044,12 @@ def near_duplicates(df: pd.DataFrame, op: NearDuplicates) -> OpResult:
     if op.action == "flag" and op.column_name in cols:
         raise AppError("column_exists", f'"{op.column_name}" is one of the columns being compared.',
                        "Choose another name for the group column.")
-    groups, skipped = near_duplicate_groups(df, cols, op.match == "similar")
+    groups, approximate = near_duplicate_groups(df, cols, op.match == "similar")
     warnings = []
-    if skipped:
-        warnings.append(f"{_plural(skipped, 'value')} were not compared for small spelling differences because "
-                        "too many start with the same letter. Exact and cleaned-up matches were still found.")
+    if approximate:
+        warnings.append(f"Large file: {_plural(approximate, 'value')} were compared for small spelling differences "
+                        f"with the {NEIGHBOURS} most similar-looking values only, so a few variants may be missed. "
+                        "Exact and cleaned-up matches were all found.")
     rows_in_groups = sum(len(g) for g in groups)
     if not groups:
         return OpResult(df.copy(deep=False), "No near-duplicate rows found.", warnings=warnings)

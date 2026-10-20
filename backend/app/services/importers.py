@@ -8,8 +8,9 @@ works for every format.
 from __future__ import annotations
 
 import json
+import os
 import re
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
@@ -182,7 +183,56 @@ def _check_xlsx_archive(path: str) -> None:
                        "Export the sheet as CSV and upload that instead.", status=413)
 
 
+def _calamine_value(value: Any) -> Any:
+    """Make python-calamine's cell values look like openpyxl's, so both readers give the same data."""
+    if isinstance(value, str):
+        return None if value == "" else value  # calamine reports empty cells as ""
+    if isinstance(value, float) and value.is_integer() and abs(value) < 2**53:
+        return int(value)  # Excel stores 7 as 7.0; openpyxl reports it as 7
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return datetime(value.year, value.month, value.day)
+    if isinstance(value, timedelta):
+        return str(value)
+    return value
+
+
+def _load_xlsx_calamine(path: str, sheet: str | None) -> LoadResult | None:
+    """Fast .xlsx reader written in Rust (pip package "python-calamine").
+
+    Returns None (and openpyxl is used) when it is not installed, the file name is not .xlsx/.xlsm,
+    or calamine cannot read the file."""
+    try:
+        from python_calamine import CalamineWorkbook
+    except ImportError:
+        return None
+    if Path(path).suffix.lower() not in (".xlsx", ".xlsm"):
+        return None  # calamine picks the format from the file name; a renamed file goes to openpyxl
+    warnings: list[str] = []
+    try:
+        wb = CalamineWorkbook.from_path(path)
+        names = list(wb.sheet_names)
+        if sheet and sheet not in names:
+            raise AppError("unknown_sheet", f'Sheet "{sheet}" was not found.', f"Available sheets: {', '.join(names)}.")
+        target = sheet or names[0]
+        if not sheet and len(names) > 1:
+            warnings.append(f'The workbook has {len(names)} sheets; loaded "{target}". Choose another sheet in the import options.')
+        rows = wb.get_sheet_by_name(target).to_python(skip_empty_area=False)
+    except AppError:
+        raise
+    except Exception:  # calamine could not read it: let openpyxl try, it reports damaged files clearly
+        return None
+    df = _frame_from_rows((tuple(_calamine_value(v) for v in row) for row in rows), warnings)
+    del rows
+    warnings.append("Formulas were imported as their last saved values.")
+    return LoadResult(df=df, encoding=None, delimiter=None, format="xlsx", warnings=warnings, sheet=target, sheets=names)
+
+
 def load_xlsx(path: str, sheet: str | None) -> LoadResult:
+    _check_xlsx_archive(path)  # zip-bomb check before any reader opens the file
+    if os.getenv("EXCEL_READER", "auto").strip().lower() != "openpyxl":
+        fast = _load_xlsx_calamine(path, sheet)
+        if fast is not None:
+            return fast
     try:
         import openpyxl
         import openpyxl.xml
@@ -194,7 +244,6 @@ def load_xlsx(path: str, sheet: str | None) -> LoadResult:
         # Without defusedxml, openpyxl is vulnerable to XML entity-expansion attacks.
         raise AppError("missing_dependency", "Excel import is disabled because the 'defusedxml' package is missing.",
                        "Run: pip install -r requirements.txt", status=501)
-    _check_xlsx_archive(path)
     warnings: list[str] = []
     handle = open(path, "rb")  # a file object, so a misnamed extension doesn't matter
     try:

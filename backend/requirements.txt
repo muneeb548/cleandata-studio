@@ -7,5 +7,7 @@ numpy>=1.26,<3.0
 pydantic>=2.7,<3.0
 openpyxl>=3.1.2,<4.0   # .xlsx import and export
 xlrd>=2.0.1,<3.0       # legacy .xls import (xlrd 2.x reads .xls only)
+python-calamine>=0.2.3,<1.0  # fast .xlsx reading (Rust); openpyxl is used when it is missing
+rapidfuzz>=3.0,<4.0    # fast spelling comparison for near-duplicates (C++)
 defusedxml>=0.7.1      # makes openpyxl safe against XML entity-expansion attacks
 phonenumbers>=8.13,<10.0  # validate and format phone numbers from every country (Google libphonenumber)

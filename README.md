@@ -334,7 +334,20 @@ $env:STRING_STORAGE="python"; python scripts/measure_memory.py 100     # old sto
 Remove-Item Env:STRING_STORAGE
 ```
 
-Choose `MAX_UPLOAD_MB` so that the reported peak memory stays well below your free RAM.
+Measured on a Windows laptop with 8 GB RAM (generated customer file, 100 MB, 1,030,000 rows × 9 columns):
+
+| | Old (`STRING_STORAGE=python`, openpyxl) | Now (Arrow, python-calamine) |
+|---|---|---|
+| Data in memory | 608 MB | **162 MB** |
+| Import | 6.4 s | 10.6 s |
+| Trim whitespace | 4.1 s | 1.0 s |
+| Remove duplicates | 1.7 s | 2.0 s |
+| Standardize phone numbers (≈1M numbers) | – | 57.9 s |
+| Excel import, 200,000 rows (7.7 MB .xlsx) | 24.3 s | **2.8 s** |
+
+Choose `MAX_UPLOAD_MB` so that the reported peak memory stays well below your free RAM. The script also times phone-number standardisation and the near-duplicate spelling check.
+
+**Near-duplicates in large files.** For small files every value is compared with every other value that starts with the same letter. When a group is larger than 500 values, the app uses the *sorted neighbourhood* method instead: values are sorted (once as written, once reversed) and each one is compared with its 15 nearest neighbours, using the C++ library `rapidfuzz`. A million names then take seconds instead of hours; the result notes that a few variants can be missed.
 
 ## Measured large-file performance
 
@@ -352,7 +365,7 @@ In the browser test (Chromium), uploading and analysing the 99.7 MB CSV took abo
 ## Known limitations
 
 - **Memory:** with the old `STRING_STORAGE=python` mode a 100 MB CSV becomes roughly 0.5 GB in memory (all values kept as text). The default mode stores text with Apache Arrow (`pyarrow`), which needs several times less; measure your own machine with `python scripts/measure_memory.py 300` (see *Big file mode*). Each session also keeps the original data plus undo steps (within `MAX_HISTORY_MEMORY_MB`). On a laptop with 8 GB RAM, work with one large file at a time. If memory runs out, Python may report an error (shown as "not enough memory") or Windows may slow down heavily.
-- **Excel import is slow** (openpyxl reads roughly 80–100 thousand cells per second here): a full-size sheet (1M rows × 8 columns) can take 1–2 minutes. Formulas are imported as their last saved values; password-protected workbooks are not supported. Only one sheet is loaded per upload.
+- **Excel import** uses the fast Rust reader `python-calamine` (installed from `requirements.txt`); without it, or with `EXCEL_READER=openpyxl`, openpyxl is used, which reads roughly 80–100 thousand cells per second (a full-size sheet can take 1–2 minutes). Compare both on your computer with `python scripts/measure_memory.py --xlsx-rows 200000`. Formulas are imported as their last saved values; password-protected workbooks are not supported. Only one sheet is loaded per upload.
 - **Legacy .xls** support uses `xlrd`; it is implemented but was **not tested with a real .xls file** in development (only the error paths were tested), because no .xls generator was available. Please try one of your own `.xls` files.
 - **Excel export** is limited by Excel itself to 1,048,575 data rows and 16,384 columns and is slower than CSV (~1 minute for a full sheet). Larger results must be downloaded as CSV.
 - **JSON** objects that wrap the records (e.g. `{"data": [...]}`) are loaded fully into memory before conversion; arrays and JSON Lines are streamed.

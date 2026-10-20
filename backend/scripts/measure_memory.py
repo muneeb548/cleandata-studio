@@ -1,7 +1,8 @@
 """Measure how much memory a large CSV needs in CleanData Studio.
 
 Creates a realistic customer CSV of the requested size (or uses your own file), imports it
-the same way an upload does, runs a few cleaning steps and prints time and memory.
+the same way an upload does, runs a few cleaning steps (trim, duplicates, phone numbers,
+near-duplicate names) and prints time and memory.
 
 Run from the backend folder (with the virtual environment active):
 
@@ -86,17 +87,57 @@ def make_csv(path: Path, megabytes: int) -> int:
     return rows
 
 
+def time_excel_readers(rows: int) -> None:
+    """Write an .xlsx with `rows` rows, then import it with python-calamine and with openpyxl."""
+    import openpyxl
+
+    from app.services.importers import load_file
+
+    fd, name = tempfile.mkstemp(suffix=".xlsx", prefix="cleandata_measure_")
+    os.close(fd)
+    path = Path(name)
+    try:
+        print(f"Creating an Excel file with {rows:,} rows (this part is slow)…")
+        rnd = random.Random(7)
+        wb = openpyxl.Workbook(write_only=True)
+        ws = wb.create_sheet("Customers")
+        ws.append(["customer_id", "name", "email", "city", "amount", "signup_date"])
+        for i in range(1, rows + 1):
+            first, last = rnd.choice(FIRST), rnd.choice(LAST)
+            ws.append([i, f"{first} {last}", f"{first.lower()}{i}@gmail.com", rnd.choice(CITIES),
+                       round(rnd.uniform(1, 9999), 2), f"2024-{rnd.randint(1, 12):02d}-{rnd.randint(1, 28):02d}"])
+        wb.save(path)
+        print(f"  {path.stat().st_size / 2**20:,.1f} MB")
+        for reader in ("auto", "openpyxl"):
+            os.environ["EXCEL_READER"] = reader
+            start = time.perf_counter()
+            df = load_file(str(path), path.name).df
+            label = "python-calamine (fast)" if reader == "auto" else "openpyxl (old)"
+            print(f"Import with {label:24s} {time.perf_counter() - start:6.1f} s   {df.shape[0]:,} rows")
+            del df
+    finally:
+        os.environ.pop("EXCEL_READER", None)
+        path.unlink(missing_ok=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("megabytes", nargs="?", type=int, default=100, help="size of the generated file (default 100)")
     parser.add_argument("--file", help="measure this CSV instead of a generated one")
+    parser.add_argument("--skip-similar", action="store_true", help="skip the near-duplicate spelling check")
+    parser.add_argument("--xlsx-rows", type=int, default=0,
+                        help="instead: make an Excel file with this many rows and time both Excel readers")
     args = parser.parse_args()
 
-    from app.schemas.operations import RemoveDuplicates, TrimWhitespace
+    from app.schemas.operations import NearDuplicates, RemoveDuplicates, StandardizePhone, TrimWhitespace
     from app.services.csv_loader import STRING_DTYPE
     from app.services.importers import load_file
     from app.services.memory import frame_bytes
     from app.services.operations import run_operation
+
+    if args.xlsx_rows:
+        time_excel_readers(args.xlsx_rows)
+        return
 
     generated = None
     if args.file:
@@ -122,6 +163,14 @@ def main() -> None:
         start = time.perf_counter()
         deduped = run_operation(trimmed, RemoveDuplicates(type="remove_duplicates")).df
         print(f"Remove duplicates: {time.perf_counter() - start:6.1f} s")
+        if "phone" in deduped.columns:
+            start = time.perf_counter()
+            run_operation(deduped, StandardizePhone(type="standardize_phone", columns=["phone"], region="PK"))
+            print(f"Standardize phone: {time.perf_counter() - start:6.1f} s")
+        if "name" in deduped.columns and not args.skip_similar:
+            start = time.perf_counter()
+            res = run_operation(deduped, NearDuplicates(type="near_duplicates", columns=["name"], match="similar"))
+            print(f"Near-duplicates (similar spelling, name): {time.perf_counter() - start:6.1f} s   {res.summary}")
         print(f"Peak memory of the whole process: {peak_memory_mb():,.0f} MB")
         del df, trimmed, deduped
     finally:

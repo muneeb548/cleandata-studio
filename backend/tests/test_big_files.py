@@ -77,3 +77,37 @@ def test_measure_script_makes_a_valid_file(tmp_path):
     df = load_csv(target.read_bytes()).df
     assert df.shape == (rows, 9)
     assert module.peak_memory_mb() > 0
+
+
+# ----------------------------------------------------------------- near-duplicates in large files
+
+@pytest.mark.parametrize("fast", [True, False])
+def test_neighbour_method_finds_spelling_variants(monkeypatch, fast):
+    from app.services import operations as ops
+
+    if not fast:
+        monkeypatch.setattr(ops, "_fast_ratio", None)  # difflib fallback
+    elif ops._fast_ratio is None:
+        pytest.skip("rapidfuzz is not installed")
+    monkeypatch.setattr(ops, "MAX_BLOCK", 3)  # force the large-file method on a small table
+    names = ["John Smith", "Jon Smith", "Jhon Smith", "Maria Garcia", "Marie Garcia", "Mohammed Ali",
+             "Muhammad Ali", "Sara Khan", "Zara Khan", "Jane Doe", "Peter Parker", "Bruce Wayne"]
+    df = pd.DataFrame({"name": pd.array(names, dtype=STRING_DTYPE)})
+    groups, approximate = ops.near_duplicate_groups(df, ["name"], similar=True)
+    found = [sorted(df["name"][g].tolist()) for g in groups]
+    assert ["Jhon Smith", "John Smith", "Jon Smith"] in found
+    assert ["Maria Garcia", "Marie Garcia"] in found
+    assert approximate > 0
+    flat = [n for g in found for n in g]
+    assert "Peter Parker" not in flat and "Bruce Wayne" not in flat
+
+
+def test_large_file_warning_is_shown(monkeypatch):
+    from app.schemas.operations import NearDuplicates
+    from app.services import operations as ops
+
+    monkeypatch.setattr(ops, "MAX_BLOCK", 1)
+    df = pd.DataFrame({"name": pd.array(["Ann Lee", "Anne Lee", "Bob Ray", "Bob Ray."], dtype=STRING_DTYPE)})
+    res = run_operation(df, NearDuplicates(type="near_duplicates", columns=["name"], match="similar"))
+    assert any("Large file" in w for w in res.warnings)
+    assert res.details["groups"] == 2
