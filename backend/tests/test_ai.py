@@ -270,6 +270,52 @@ def test_summary_uses_the_change_report(use_ai):
     assert "Rows: 5 before, 4 after" in fake.calls[0]["prompt"] and "Urdu" in fake.calls[0]["system"]
 
 
+def _dedupe(headers):
+    op = {"type": "remove_duplicates"}
+    token = client.post("/api/operations/preview", json={"operation": op}, headers=headers).json().get("preview_token")
+    client.post("/api/operations/apply", json={"operation": op, "preview_token": token}, headers=headers)
+
+
+def test_summary_gets_the_totals_from_the_app(use_ai):
+    fake = use_ai({"summary": "We removed 1 duplicate row."})
+    headers = upload()
+    _dedupe(headers)
+    data = client.post("/api/ai/summary", json={}, headers=headers).json()
+    assert "Totals: 1 steps, 0 cells changed, 1 rows removed, 0 columns removed." in fake.calls[0]["prompt"]
+    assert data["note"] is None and len(fake.calls) == 1
+
+
+def test_summary_with_invented_numbers_is_asked_again_then_replaced(use_ai):
+    fake = use_ai({"summary": "We replaced 15 values and removed 1 duplicate."})
+    headers = upload()
+    _dedupe(headers)
+    data = client.post("/api/ai/summary", json={}, headers=headers).json()
+    assert len(fake.calls) == 2 and "15" in fake.calls[1]["prompt"]
+    assert data["summary"].startswith("Hi! Your cleaned file is attached.")  # the exact change report
+    assert "did not match" in data["note"]
+
+
+def test_summary_retry_that_fixes_the_numbers_is_used(use_ai):
+    fake = use_ai({"summary": "We replaced 15 values."})
+    answers = iter([{"summary": "We replaced 15 values."}, {"summary": "We removed 1 duplicate row."}])
+    fake.complete_json = lambda system, prompt, schema, max_tokens=2000: (
+        fake.calls.append({"prompt": prompt}) or next(answers))
+    headers = upload()
+    _dedupe(headers)
+    data = client.post("/api/ai/summary", json={}, headers=headers).json()
+    assert data["summary"] == "We removed 1 duplicate row." and data["note"] is None
+
+
+@pytest.mark.parametrize("text,numbers", [
+    ("Removed 1,250 rows and 3.50 cells", {"1250", "3.5"}),
+    ("1. Removed 4 rows\n2. Fixed 2 emails", {"4", "2"}),
+    ("۱۵ قطاریں", {"15"}),
+    ("No numbers here.", set()),
+])
+def test_numbers_in(text, numbers):
+    assert ai.numbers_in(text) == numbers
+
+
 def test_empty_summary_is_an_error(use_ai):
     use_ai({"summary": "  "})
     r = client.post("/api/ai/summary", json={}, headers=upload())

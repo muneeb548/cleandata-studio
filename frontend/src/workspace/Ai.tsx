@@ -344,17 +344,23 @@ export function AiSummaryCard() {
   const [language, setLanguage] = useState("English");
   const [consent, setConsent] = useState(false);
   const [text, setText] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => setText(null), [version]);
+  useEffect(() => {
+    setText(null);
+    setNote(null);
+  }, [version]);
   if (!status) return null;
 
   const write = async () => {
     setBusy(true);
     setError(null);
     try {
-      setText((await api.aiSummary(language, consent)).summary);
+      const res = await api.aiSummary(language, consent);
+      setText(res.summary);
+      setNote(res.note ?? null);
     } catch (err) {
       setError(toApiError(err));
     } finally {
@@ -406,12 +412,23 @@ export function AiSummaryCard() {
         )}
         {text && (
           <>
+            {note && (
+              <Alert tone="warning" title="Exact report shown instead">
+                {note}
+              </Alert>
+            )}
             <pre className="scroll-thin max-h-80 overflow-auto rounded-md border border-border bg-canvas p-3 font-sans text-small whitespace-pre-wrap">{text}</pre>
             <div className="flex gap-2">
               <Button variant="secondary" onClick={copy}>
                 <ClipboardCopy /> Copy
               </Button>
-              <Button variant="ghost" onClick={() => setText(null)}>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setText(null);
+                  setNote(null);
+                }}
+              >
                 <X /> Clear
               </Button>
             </div>

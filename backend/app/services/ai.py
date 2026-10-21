@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Any
 
 import pandas as pd
@@ -442,18 +443,50 @@ SUMMARY_SCHEMA: dict[str, Any] = {
 SUMMARY_SYSTEM = """You write a short, friendly report for a client whose spreadsheet was cleaned.
 Use plain language, no jargon, 4 to 8 short sentences or bullet points.
 Say what problems were found, what was fixed (with numbers), and what still needs the client's decision.
-Only use facts from the information given. Do not invent numbers. Write in {language}.
+Only use facts from the information given. Copy every number exactly as it is written there.
+Never add, subtract or estimate numbers yourself: for totals, use the "Totals" line. Write in {language}.
 """
+
+_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_LIST_MARKER_RE = re.compile(r"^\s*\d{1,2}[.)]\s", re.MULTILINE)
+
+
+def numbers_in(text: str) -> set[str]:
+    """Every number written in the text, normalised ("1,250" → "1250", Urdu/Arabic digits → 0-9).
+
+    Numbers that only number a list ("1. Removed ...") are ignored.
+    """
+    digits = "".join(str(unicodedata.digit(ch)) if ch.isdigit() and not ch.isascii() else ch for ch in text)
+    digits = _LIST_MARKER_RE.sub("", digits)
+    out = set()
+    for match in _NUMBER_RE.findall(digits):
+        value = match.rstrip(",").replace(",", "")
+        if "." in value:
+            value = value.rstrip("0").rstrip(".")
+        out.add(value)
+    return out
 
 
 def summary(session: Session, language: str = "English", consent: bool = False) -> dict:
+    """A friendly summary written by the AI, with every number checked against the real report.
+
+    Small local models are weak at arithmetic ("replaced 15 values" when 8 were). So the app
+    gives the totals itself, and any number in the answer that is not in the facts makes the
+    app ask once more; if the numbers are still wrong, the exact change report is returned.
+    """
     client = _start(session, consent)
     values = settings.ai_send_values
     report = workspace.change_report(session)
+    with session.lock:
+        cells = sum(h.cells_changed for h in session.history)
+        rows_removed = sum(h.rows_removed for h in session.history)
+        columns_removed = sum(h.columns_removed for h in session.history)
     lines = [
         f"File: {report['file']}",
         f"Rows: {report['rows_before']} before, {report['rows_after']} after. "
         f"Columns: {report['columns_before']} before, {report['columns_after']} after.",
+        f"Totals: {len(report['steps'])} steps, {cells} cells changed, {rows_removed} rows removed, "
+        f"{columns_removed} columns removed.",
         "Steps applied:",
     ]
     for s in report["steps"]:
@@ -465,12 +498,30 @@ def summary(session: Session, language: str = "English", consent: bool = False) 
         lines.append(f'Needs review: {r["rows"]} rows in "{r["column"]}"')
     if values:
         lines += [f"Open item: {o}" for o in report["open_items"]]
-    answer = client.complete_json(SUMMARY_SYSTEM.format(language=language), "\n".join(lines), SUMMARY_SCHEMA, max_tokens=1200)
-    text = str(answer.get("summary", "")).strip()
+    facts = "\n".join(lines)
+    allowed = numbers_in(facts)
+    system = SUMMARY_SYSTEM.format(language=language)
+
+    def write(prompt: str) -> str:
+        answer = client.complete_json(system, prompt, SUMMARY_SCHEMA, max_tokens=1200)
+        return str(answer.get("summary", "")).strip()
+
+    text = write(facts)
     if not text:
         raise AppError("ai_bad_answer", "The AI did not write a summary.", "Try again.", status=502)
+    note = None
+    wrong = numbers_in(text) - allowed
+    if wrong:
+        retry = write(f"{facts}\n\nYour last summary used numbers that are not in these facts: "
+                      f"{', '.join(sorted(wrong))}. Write it again and copy every number exactly from the facts.")
+        if retry and not numbers_in(retry) - allowed:
+            text = retry
+        else:
+            text = report["message"]
+            note = ("The AI's numbers did not match the real changes, so the exact change report is shown instead "
+                    "(in English).")
     return {"summary": text[:5000], "shared": "The change report: row and column counts and the list of applied steps.",
-            "provider": ai_client.provider_info().label}
+            "provider": ai_client.provider_info().label, "note": note}
 
 
 # --------------------------------------------------------------------------- 4. questions about the data

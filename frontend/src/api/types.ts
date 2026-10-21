@@ -448,6 +448,8 @@ export interface AiSummary {
   summary: string;
   shared: string;
   provider: string;
+  /** Set when the AI's numbers were wrong and the exact change report is shown instead. */
+  note?: string | null;
 }
 
 export interface AiAnswer {

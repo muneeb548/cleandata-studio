@@ -472,6 +472,7 @@ class AiSummary(_Model):
     summary: str
     shared: str
     provider: str
+    note: str | None = Field(None, description="Set when the AI's numbers were wrong and the exact report is shown instead.")
 
 
 class AiAnswer(_Model):
