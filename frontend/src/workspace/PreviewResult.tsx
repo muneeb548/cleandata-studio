@@ -182,6 +182,28 @@ export function PreviewResult({ preview, mode }: { preview: OperationPreview; mo
         </section>
       )}
 
+      {changes.added_rows && changes.added_rows.rows.length > 0 && (
+        <section>
+          <h3 className="mb-2 text-body font-semibold">
+            Rows {mode === "preview" ? "to be added" : "added"}
+            {typeof details.rows_added === "number" && details.rows_added > changes.added_rows.rows.length && (
+              <span className="ml-2 font-normal text-muted-foreground">
+                (first {changes.added_rows.rows.length} of {pluralize(details.rows_added, "row")})
+              </span>
+            )}
+          </h3>
+          <div className="rounded-md border border-border">
+            <RowsTable
+              columns={changes.added_rows.columns.map((name) => ({ name }))}
+              rows={changes.added_rows.rows}
+              rowNumbers={changes.added_rows.row_numbers}
+              caption="Rows that will be added"
+              maxHeight="max-h-72"
+            />
+          </div>
+        </section>
+      )}
+
       {changes.cell_samples.length > 0 && (
         <section>
           <h3 className="mb-2 text-body font-semibold">

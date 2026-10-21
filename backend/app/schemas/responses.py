@@ -87,6 +87,18 @@ class LogEvent(_Model):
     summary: str | None
 
 
+class AttachedFileInfo(_Model):
+    id: str
+    name: str
+    size: int
+    format: str
+    sheet: str | None
+    rows: int
+    columns: list[str]
+    warnings: list[str]
+    added_at: float
+
+
 class SessionInfo(_Model):
     file: FileInfo
     original_shape: Shape
@@ -95,6 +107,22 @@ class SessionInfo(_Model):
     log: list[LogEvent]
     can_undo: bool
     expires_in_seconds: int
+    files: list[AttachedFileInfo] = Field(default_factory=list,
+                                          description="Other files added to this session for Combine files.")
+
+
+class AttachResponse(_Model):
+    file: AttachedFileInfo
+    session: SessionInfo
+
+
+class FilePreviewTable(_Model):
+    columns: list[str]
+    rows: list[list[Cell]]
+
+
+class AttachedFilePreview(AttachedFileInfo):
+    preview: FilePreviewTable
 
 
 class UploadResponse(SessionInfo):
@@ -212,6 +240,7 @@ class Mapping(_Model):
 class Changes(_Model):
     cell_samples: list[CellChange]
     removed_rows: RemovedRows | None
+    added_rows: RemovedRows | None = Field(None, description="Sample of rows an operation adds (Combine files).")
     removed_columns: list[str]
     mapping: list[Mapping] | None
 
@@ -334,6 +363,8 @@ class Recipe(_Model):
     source_file: str
     created_at: str
     steps: list[dict[str, Any]] = Field(description="Operations in the order they were applied.")
+    left_out: list[str] = Field(default_factory=list,
+                                description="Applied steps a recipe cannot repeat (Combine files needs the other file).")
 
 
 class ValueCount(_Model):

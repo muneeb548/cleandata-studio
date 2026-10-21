@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Copy,
   Eye,
+  FileSpreadsheet,
   Flag,
   History,
   Info,
@@ -26,6 +27,7 @@ import {
 } from "lucide-react";
 import { ApiError, SESSION_GONE, api } from "@/api/client";
 import { AiSuggestMappings } from "./Ai";
+import { CombineFilesForm } from "./CombineFiles";
 import type { ColumnProfile, ColumnValues, FlagRule, Operation, OperationPreview, OutlierReport, Profile } from "@/api/types";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -73,6 +75,7 @@ const CATEGORY_ICONS: Record<CategoryId, LucideIcon> = {
   split: Split,
   phone: Phone,
   flags: Flag,
+  combine: FileSpreadsheet,
 };
 
 const EXPLANATIONS: Record<CleanChoice, string> = {
@@ -97,6 +100,7 @@ const EXPLANATIONS: Record<CleanChoice, string> = {
   organize_columns: "Renames, removes and reorders columns, for example to match the columns a CRM or another system expects.",
   sort_rows: "Sorts the rows by one or more columns. Numbers sort as numbers, dates as dates, and the download keeps this order.",
   mark_missing: "Turns words that mean “no value” (Unknown, TBD, ---) into real empty cells, so they count as missing and can be filled.",
+  combine_files: "Adds another file to your data: its rows below yours, or its columns next to matching rows (like VLOOKUP). The other file is never changed.",
 };
 
 const SHORT_LABELS: Partial<Record<CleanChoice, string>> = {
@@ -573,6 +577,8 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
         </div>
       );
 
+    case "combine_files":
+      return <CombineFilesForm form={form} set={set} cols={cols} />;
     case "flag_rows":
       return <FlagRulesForm form={form} set={set} cols={cols} />;
 

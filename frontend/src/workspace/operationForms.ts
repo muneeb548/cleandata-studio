@@ -2,7 +2,7 @@
  * Pure helpers that turn the cleaning form state into an API operation.
  * Kept free of React so they are easy to unit test.
  */
-import type { ColumnProfile, FlagRule, Operation, OperationType, SortKey } from "@/api/types";
+import type { ColumnProfile, FlagRule, JoinHow, JoinKey, Operation, OperationType, SortKey } from "@/api/types";
 
 /** "mark_missing" is a shortcut that builds a map_values operation (listed words → empty). */
 export type CleanChoice = OperationType | "outliers" | "mark_missing";
@@ -73,6 +73,17 @@ export type FormState = {
   sortMissing: "last" | "first";
   mmColumns: string[];
   mmWords: string;
+  /** combine_files: the added file to combine with, and how */
+  cfFileId: string;
+  cfMode: "append" | "join";
+  cfSourceOn: boolean;
+  cfSourceName: string;
+  cfKeys: JoinKey[];
+  cfHow: JoinHow;
+  cfLoose: boolean;
+  cfDuplicates: "first" | "all";
+  /** columns to bring from the other file (empty = all except the match columns) */
+  cfColumns: string[];
 };
 
 export const DEFAULT_FORM: FormState = {
@@ -140,6 +151,15 @@ export const DEFAULT_FORM: FormState = {
   sortMissing: "last",
   mmColumns: [],
   mmWords: "Unknown, unk, TBD, not known, ---",
+  cfFileId: "",
+  cfMode: "append",
+  cfSourceOn: false,
+  cfSourceName: "source_file",
+  cfKeys: [{ left: "", right: "" }],
+  cfHow: "left",
+  cfLoose: true,
+  cfDuplicates: "first",
+  cfColumns: [],
 };
 
 /** Words typed in the "mark as missing" box, split on commas or new lines. */
@@ -379,9 +399,47 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
         operation: { type: "map_values", columns: f.mmColumns, mappings: words.map((w) => ({ value: w, to: "" })), ignore_case: true },
       };
     }
+    case "combine_files": {
+      if (!f.cfFileId) return { error: "Add the other file, then choose it." };
+      if (f.cfMode === "append") {
+        if (f.cfSourceOn && !f.cfSourceName.trim()) return { error: "Enter a name for the column that records the source file." };
+        return {
+          operation: { type: "combine_files", file_id: f.cfFileId, mode: "append", source_column: f.cfSourceOn ? f.cfSourceName.trim() : null },
+        };
+      }
+      const keys = f.cfKeys.filter((k) => k.left || k.right);
+      if (!keys.length || keys.some((k) => !k.left || !k.right)) return { error: "Choose the matching column in both files." };
+      if (new Set(keys.map((k) => k.left)).size !== keys.length || new Set(keys.map((k) => k.right)).size !== keys.length)
+        return { error: "Use each column only once to match rows." };
+      return {
+        operation: {
+          type: "combine_files",
+          file_id: f.cfFileId,
+          mode: "join",
+          keys,
+          how: f.cfHow,
+          loose_keys: f.cfLoose,
+          duplicates: f.cfDuplicates,
+          columns: f.cfColumns.filter((c) => !keys.some((k) => k.right === c)),
+        },
+      };
+    }
     case "outliers":
       return { error: "Outlier review does not change data." };
   }
+}
+
+/** Columns that probably hold the same thing in both files (same name ignoring case, spaces and _ or -). */
+export function suggestJoinKey(current: string[], other: string[]): JoinKey | null {
+  const norm = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, "");
+  const preferred = ["email", "emailaddress", "id", "customerid", "orderid", "phone", "sku", "code"];
+  const pairs: JoinKey[] = [];
+  for (const left of current) {
+    const right = other.find((o) => norm(o) === norm(left));
+    if (right) pairs.push({ left, right });
+  }
+  if (!pairs.length) return null;
+  return pairs.find((p) => preferred.includes(norm(p.left))) ?? pairs[0];
 }
 
 /** Pre-fill the form when the user clicks "Fix" on a detected issue. */
@@ -463,6 +521,7 @@ export const CHOICES: { id: CleanChoice; label: string; description: string }[] 
   { id: "clean_numbers", label: "Clean numbers and currencies", description: "$1,250.00, Rs 1,25,000, 1.234,56 € → numbers." },
   { id: "map_values", label: "Map values", description: "Replace many values at once from a table." },
   { id: "flag_rows", label: "Flag rows for review", description: "Add a column explaining which rows need attention." },
+  { id: "combine_files", label: "Combine files", description: "Add rows or columns from another file (like VLOOKUP)." },
 ];
 
 export type CategoryId =
@@ -476,7 +535,8 @@ export type CategoryId =
   | "replace"
   | "split"
   | "phone"
-  | "flags";
+  | "flags"
+  | "combine";
 
 /** Operations grouped the way users think about cleaning. */
 export const CATEGORIES: { id: CategoryId; label: string; description: string; choices: CleanChoice[] }[] = [
@@ -491,6 +551,7 @@ export const CATEGORIES: { id: CategoryId; label: string; description: string; c
   { id: "split", label: "Split & merge", description: "Split or join columns", choices: ["split_column", "merge_columns"] },
   { id: "phone", label: "Contact details", description: "Phones, emails, countries", choices: ["standardize_phone", "clean_email", "standardize_country"] },
   { id: "flags", label: "Flag for review", description: "Mark rows that need checking", choices: ["flag_rows"] },
+  { id: "combine", label: "Combine files", description: "Stack files or match rows (VLOOKUP)", choices: ["combine_files"] },
 ];
 
 export function categoryOf(choice: CleanChoice): CategoryId {

@@ -24,12 +24,16 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.core.config import settings
 from app.core.errors import AppError
-from app.schemas.operations import OPERATION_MODELS, Operation
+from app.schemas.operations import OPERATION_MODELS as _ALL_OPERATION_MODELS
+from app.schemas.operations import Operation
 from app.services import ai_client, workspace
 from app.services.operations import LABELS, run_operation
 from app.services.sessions import Session
 
 OPERATION = TypeAdapter(Operation)
+# Combining files needs a second file the user adds by hand, so the assistant never plans it.
+NOT_FOR_AI = {"combine_files"}
+OPERATION_MODELS = {k: v for k, v in _ALL_OPERATION_MODELS.items() if k not in NOT_FOR_AI}
 MAX_STEPS = 10
 SAMPLE_ROWS = 2000           # proposed steps are tried on this many rows before they are shown
 MAX_PROMPT_COLUMNS = 150     # very wide files: describe the first 150 columns only
@@ -282,6 +286,9 @@ def validate_steps(df: pd.DataFrame, raw_steps: list[dict]) -> tuple[list[dict],
             if not isinstance(params, dict):
                 raise ValueError
             params.pop("type", None)
+            if name in NOT_FOR_AI:
+                rejected.append({"label": label, "reason": "combining files is done by hand under Combine files"})
+                continue
             op = OPERATION.validate_python({"type": name, **params})
         except (ValueError, ValidationError) as exc:
             reason = "its settings were not valid"

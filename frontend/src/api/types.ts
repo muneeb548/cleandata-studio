@@ -43,6 +43,23 @@ export interface HistoryItem {
   undoable: boolean;
 }
 
+/** Another file added to the session so it can be combined with the working data. */
+export interface AttachedFile {
+  id: string;
+  name: string;
+  size: number;
+  format: string;
+  sheet: string | null;
+  rows: number;
+  columns: string[];
+  warnings: string[];
+  added_at: number;
+}
+
+export interface AttachedFilePreview extends AttachedFile {
+  preview: { columns: string[]; rows: CellValue[][] };
+}
+
 export interface SessionInfo {
   file: FileInfo;
   original_shape: Shape;
@@ -51,6 +68,8 @@ export interface SessionInfo {
   log: LogEvent[];
   can_undo: boolean;
   expires_in_seconds: number;
+  /** Other files added for Combine files (older servers may leave this out). */
+  files?: AttachedFile[];
 }
 
 export interface LogEvent {
@@ -172,7 +191,8 @@ export type OperationType =
   | "near_duplicates"
   | "flag_rows"
   | "organize_columns"
-  | "sort_rows";
+  | "sort_rows"
+  | "combine_files";
 
 export interface QuickStep {
   id: string;
@@ -215,6 +235,8 @@ export interface Recipe {
   source_file: string;
   created_at: string;
   steps: Operation[];
+  /** Applied steps a recipe cannot repeat (Combine files needs the other file). */
+  left_out?: string[];
 }
 
 export interface ChangeReport {
@@ -300,7 +322,22 @@ export type Operation =
   | { type: "near_duplicates"; columns: string[]; match: "normalized" | "similar"; action: "flag" | "remove"; column_name: string }
   | { type: "flag_rows"; rules: FlagRule[]; column_name: string }
   | { type: "organize_columns"; rename: { column: string; to: string }[]; drop: string[]; order: string[] }
-  | { type: "sort_rows"; by: SortKey[]; missing: "last" | "first" };
+  | { type: "sort_rows"; by: SortKey[]; missing: "last" | "first" }
+  | {
+      type: "combine_files";
+      file_id: string;
+      mode: "append" | "join";
+      source_column?: string | null;
+      keys?: JoinKey[];
+      how?: JoinHow;
+      loose_keys?: boolean;
+      duplicates?: "first" | "all";
+      columns?: string[];
+      suffix?: string;
+    };
+
+export type JoinKey = { left: string; right: string };
+export type JoinHow = "left" | "inner" | "outer";
 
 export interface CellChange {
   row: number;
@@ -326,6 +363,8 @@ export interface OperationPreview {
   changes: {
     cell_samples: CellChange[];
     removed_rows: { columns: string[]; row_numbers: number[]; rows: CellValue[][] } | null;
+    /** Sample of rows the operation adds (Combine files). */
+    added_rows?: { columns: string[]; row_numbers: number[]; rows: CellValue[][] } | null;
     removed_columns: string[];
     mapping: { before: string; after: string }[] | null;
   };

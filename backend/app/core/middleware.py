@@ -19,7 +19,7 @@ async def guard(request: Request, call_next):
         # platform health probe over plain HTTP still gets 200.
         return RedirectResponse(str(request.url.replace(scheme="https")), status_code=308)
     client = client_ip(request.client.host if request.client else None, request.headers, settings.client_ip_header)
-    is_upload = request.url.path == "/api/upload"
+    is_upload = request.url.path == "/api/upload" or (request.url.path == "/api/files" and request.method == "POST")
     limit = settings.upload_limit_per_minute if is_upload else settings.rate_limit_per_minute
     if request.method != "OPTIONS" and not rate_limiter.allow(f"{client}:{'u' if is_upload else 'a'}", limit):
         response = JSONResponse(

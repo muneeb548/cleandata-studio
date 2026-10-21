@@ -1,5 +1,5 @@
 import type { ColumnProfile } from "@/api/types";
-import { DEFAULT_FORM, buildOperation, columnRestriction, formForIssue, mappingRows, missingWords } from "./operationForms";
+import { DEFAULT_FORM, buildOperation, columnRestriction, formForIssue, mappingRows, missingWords, suggestJoinKey } from "./operationForms";
 
 const col = (name: string, type: ColumnProfile["type"], is_text = true): ColumnProfile => ({
   name,
@@ -248,5 +248,53 @@ describe("organize, sort, mark missing and range checks", () => {
       rules: [{ column: "age", check: "out_of_range", min: "0", max: "100" }, { column: "email", check: "missing" }],
       column_name: "needs_review",
     });
+  });
+});
+
+describe("combine files", () => {
+  it("needs a file first", () => {
+    expect(buildOperation("combine_files", DEFAULT_FORM).error).toMatch(/file/);
+  });
+
+  it("builds an append with an optional source column", () => {
+    const f = { ...DEFAULT_FORM, cfFileId: "abc", cfMode: "append" as const };
+    expect(buildOperation("combine_files", f).operation).toEqual({ type: "combine_files", file_id: "abc", mode: "append", source_column: null });
+    expect(buildOperation("combine_files", { ...f, cfSourceOn: true, cfSourceName: " source " }).operation).toMatchObject({ source_column: "source" });
+    expect(buildOperation("combine_files", { ...f, cfSourceOn: true, cfSourceName: " " }).error).toBeTruthy();
+  });
+
+  it("builds a join and never brings a match column twice", () => {
+    const f = {
+      ...DEFAULT_FORM,
+      cfFileId: "abc",
+      cfMode: "join" as const,
+      cfKeys: [{ left: "email", right: "Email" }],
+      cfColumns: ["Email", "city"],
+      cfHow: "inner" as const,
+    };
+    expect(buildOperation("combine_files", f).operation).toEqual({
+      type: "combine_files",
+      file_id: "abc",
+      mode: "join",
+      keys: [{ left: "email", right: "Email" }],
+      how: "inner",
+      loose_keys: true,
+      duplicates: "first",
+      columns: ["city"],
+    });
+  });
+
+  it("asks for both sides of every match", () => {
+    const f = { ...DEFAULT_FORM, cfFileId: "abc", cfMode: "join" as const };
+    expect(buildOperation("combine_files", f).error).toMatch(/matching column/);
+    expect(buildOperation("combine_files", { ...f, cfKeys: [{ left: "email", right: "" }] }).error).toMatch(/matching column/);
+    const twice = { ...f, cfKeys: [{ left: "a", right: "x" }, { left: "a", right: "y" }] };
+    expect(buildOperation("combine_files", twice).error).toMatch(/only once/);
+  });
+
+  it("suggests a column with the same name, preferring ids and emails", () => {
+    expect(suggestJoinKey(["name", "Email Address"], ["Name", "email_address"])).toEqual({ left: "Email Address", right: "email_address" });
+    expect(suggestJoinKey(["name", "city"], ["Name"])).toEqual({ left: "name", right: "Name" });
+    expect(suggestJoinKey(["a"], ["b"])).toBeNull();
   });
 });

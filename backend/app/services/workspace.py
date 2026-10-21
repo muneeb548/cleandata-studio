@@ -20,7 +20,7 @@ from app.core.errors import AppError
 from app.services import profiling
 from app.services.exporters import write_export
 from app.services.importers import FORMAT_LABELS, load_file, validate_filename
-from app.services.memory import new_bytes
+from app.services.memory import frame_bytes, new_bytes
 from app.services.operations import (
     DATA_LOSS_TYPES,
     LABELS,
@@ -30,10 +30,12 @@ from app.services.operations import (
     outlier_report,
     run_operation,
 )
-from app.services.sessions import HistoryEntry, Session, SessionStore, new_entry_id
+from app.services.combine import CombineContext
+from app.services.sessions import AttachedFile, HistoryEntry, Session, SessionStore, new_entry_id
 
 PREVIEW_ROW_SAMPLE = 20
 MAX_COLUMNS = 5000  # wider files are almost always a wrong separator, and every view is per-column
+MAX_ATTACHED_FILES = 10  # other files that can be added to one session for Combine files
 
 
 # --------------------------------------------------------------------------- session lifecycle
@@ -96,6 +98,86 @@ def _remove(path: str) -> None:
         pass
 
 
+# --------------------------------------------------------------------------- other files (Combine files)
+
+def attach_file_from_path(store: SessionStore, session: Session, filename: str | None, path: str, size: int,
+                          requested_format: str | None = None, sheet: str | None = None) -> dict:
+    """Load another file into the session so it can be appended or joined to the working data.
+
+    The same validation and limits as the main upload apply. The file is kept in memory only
+    and counts towards the session's memory; it is deleted with the session."""
+    safe_name = validate_filename(filename)
+    if size > settings.max_upload_bytes:
+        raise AppError("file_too_large", f"The file is larger than the {settings.max_upload_mb} MB limit.",
+                       "Split the file into smaller parts or remove unneeded columns.", status=413)
+    with session.lock:
+        if len(session.files) >= MAX_ATTACHED_FILES:
+            raise AppError("too_many_files", f"You can add up to {MAX_ATTACHED_FILES} other files to one dataset.",
+                           "Remove a file you no longer need, then add the new one.", status=409)
+    try:
+        result = load_file(path, safe_name, requested_format, sheet)
+    except MemoryError as exc:
+        raise AppError("out_of_memory", "There is not enough memory to load this file.",
+                       "Close other programs, or split the file into smaller parts.", status=507) from exc
+    if result.df.shape[1] > MAX_COLUMNS:
+        raise AppError("too_many_columns",
+                       f"The file has {result.df.shape[1]:,} columns; the limit is {MAX_COLUMNS:,}.",
+                       "Check that the right separator was used, or remove unneeded columns.", status=422)
+    size_in_memory = frame_bytes(result.df)
+    store.reserve(session, size_in_memory)
+    attached = AttachedFile(id=new_entry_id(), name=safe_name, size=size, format=result.format,
+                            sheet=result.sheet, df=result.df, warnings=result.warnings,
+                            added_at=time.time(), bytes=size_in_memory)
+    with session.lock:
+        if len(session.files) >= MAX_ATTACHED_FILES:
+            raise AppError("too_many_files", f"You can add up to {MAX_ATTACHED_FILES} other files to one dataset.",
+                           "Remove a file you no longer need, then add the new one.", status=409)
+        session.files[attached.id] = attached
+        return {"file": attached.public(), "session": session_info(session)}
+
+
+def attach_file(store: SessionStore, session: Session, filename: str | None, raw: bytes,
+                requested_format: str | None = None, sheet: str | None = None) -> dict:
+    """Add another file from in-memory bytes (convenience for tests)."""
+    safe_name = validate_filename(filename)
+    path = temp_upload_path(safe_name)
+    try:
+        with open(path, "wb") as f:
+            f.write(raw)
+        return attach_file_from_path(store, session, safe_name, path, len(raw), requested_format, sheet)
+    finally:
+        _remove(path)
+
+
+def remove_file(session: Session, file_id: str) -> dict:
+    """Forget an added file. Steps already applied with it keep their result (and can be undone)."""
+    with session.lock:
+        if session.files.pop(file_id, None) is None:
+            raise AppError("file_not_found", "That file is no longer available.", None, status=404)
+        return session_info(session)
+
+
+def preview_file(session: Session, file_id: str, rows: int = 10) -> dict:
+    """The first rows of an added file, so the user can check it before combining."""
+    with session.lock:
+        attached = session.files.get(file_id)
+        if attached is None:
+            raise AppError("file_not_found", "That file is no longer available.",
+                           "Add the file again.", status=404)
+        df = attached.df.head(max(1, min(rows, 50)))
+        return {**attached.public(), "preview": {"columns": [str(c) for c in df.columns],
+                                                 "rows": profiling.frame_rows(df)}}
+
+
+def _context(session: Session) -> CombineContext:
+    """What Combine files needs besides the working data. Caller holds the session lock."""
+    highest = -1
+    for frame in (session.original, session.current):
+        if len(frame):
+            highest = max(highest, int(frame.index.max()))
+    return CombineContext(files=session.files, index_start=highest + 1, current_name=session.filename)
+
+
 def session_info(session: Session) -> dict:
     current = session.current
     return {
@@ -116,6 +198,7 @@ def session_info(session: Session) -> dict:
         "log": [e.public() for e in session.log],
         "can_undo": session.can_undo,
         "expires_in_seconds": settings.session_ttl_minutes * 60,
+        "files": [f.public() for f in session.files.values()],
     }
 
 
@@ -247,7 +330,8 @@ def get_values(session: Session, column: str, limit: int = 500) -> dict:
 
 def _describe(before: pd.DataFrame, op: BaseModel, result) -> dict:
     after = result.df
-    changes: dict = {"cell_samples": [], "removed_rows": None, "removed_columns": [], "mapping": None}
+    changes: dict = {"cell_samples": [], "removed_rows": None, "added_rows": None, "removed_columns": [],
+                     "mapping": None}
 
     rename = None
     if op.type in ("clean_column_names", "organize_columns"):
@@ -270,7 +354,17 @@ def _describe(before: pd.DataFrame, op: BaseModel, result) -> dict:
         }
     changes["removed_columns"] = result.details.get("removed_columns", [])
 
-    details = {k: v for k, v in result.details.items() if k not in ("removed_index", "mapping", "touched")}
+    added_index = result.details.get("added_index") or []
+    if added_index:
+        sample_idx = added_index[:PREVIEW_ROW_SAMPLE]
+        changes["added_rows"] = {
+            "columns": [str(c) for c in after.columns],
+            "row_numbers": [int(i) + 1 for i in sample_idx],
+            "rows": profiling.frame_rows(after.loc[sample_idx]),
+        }
+
+    details = {k: v for k, v in result.details.items()
+               if k not in ("removed_index", "added_index", "mapping", "touched")}
     return {
         "operation": {"type": op.type, "label": LABELS[op.type], "params": op.model_dump()},
         "summary": result.summary,
@@ -299,7 +393,7 @@ def preview_operation(session: Session, op: BaseModel) -> dict:
     """
     with session.lock:
         before = session.current
-        result = run_operation(before, op)
+        result = run_operation(before, op, _context(session))
         description = _describe(before, op, result)
         description["preview_token"] = session.preview_token(op.model_dump())
         return description
@@ -329,7 +423,7 @@ def _apply_step(session: Session, op: BaseModel) -> tuple[dict, HistoryEntry | N
     and has already checked the preview token. Returns (description, entry or None if unchanged)."""
     params = op.model_dump()
     before = session.current
-    result = run_operation(before, op)
+    result = run_operation(before, op, _context(session))
     if result.blocked:
         raise AppError("operation_blocked", result.blocked,
                        "Nothing was changed. Adjust the options and preview again.", status=422)
@@ -377,8 +471,9 @@ def preview_quick_clean(session: Session, ops: list[BaseModel]) -> dict:
         work = before = session.current
         steps = []
         cells = 0
+        ctx = _context(session)
         for op in ops:
-            result = run_operation(work, op)
+            result = run_operation(work, op, ctx)
             steps.append({"label": LABELS[op.type], "summary": result.summary, "changed": result.changed and not result.blocked,
                           "blocked": result.blocked, "warnings": result.warnings})
             if result.blocked:
@@ -417,6 +512,13 @@ def recipe(session: Session) -> dict:
             raise AppError("no_steps", "No cleaning steps have been applied yet.",
                            "Apply the steps you want to reuse, then save the recipe.", status=409)
         stem = os.path.splitext(session.filename)[0]
+        # Combining needs the other file, which a recipe never contains, so those steps are left out.
+        steps = [h.params for h in session.history if h.type != "combine_files"]
+        left_out = [h.summary for h in session.history if h.type == "combine_files"]
+        if not steps:
+            raise AppError("no_steps", "Only Combine files steps were applied, and a recipe cannot repeat them "
+                           "because it never contains the other file.",
+                           "Combine the files again next time, then apply the recipe.", status=409)
         return {
             "app": "CleanData Studio",
             "kind": "cleaning-recipe",
@@ -424,7 +526,8 @@ def recipe(session: Session) -> dict:
             "name": f"{stem} cleanup",
             "source_file": session.filename,
             "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-            "steps": [h.params for h in session.history],
+            "steps": steps,
+            "left_out": left_out,
         }
 
 

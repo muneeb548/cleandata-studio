@@ -54,7 +54,8 @@ export function RecipeCard() {
       a.download = `${stem}_recipe.json`;
       a.click();
       URL.revokeObjectURL(url);
-      toast({ tone: "success", title: "Recipe saved", description: `${pluralize(recipe.steps.length, "step")} saved. Apply it to the next file from the Overview page.` });
+      const leftOut = recipe.left_out?.length ? ` ${pluralize(recipe.left_out.length, "Combine files step")} left out: the recipe never contains the other file.` : "";
+      toast({ tone: "success", title: "Recipe saved", description: `${pluralize(recipe.steps.length, "step")} saved. Apply it to the next file from the Overview page.${leftOut}` });
     } catch (err) {
       handleError(err, "Could not save the recipe");
     } finally {
