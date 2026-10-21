@@ -116,6 +116,47 @@ Deletes the session and its data immediately. Idempotent (204 even if it was alr
 
 ---
 
+## Other files (Combine files)
+
+### `POST /api/files?filename=orders.csv[&format=…][&sheet=…]` → 201
+
+Adds another file to the current session (header `X-Session-Id`), with the same body format,
+validation and size limit as `POST /api/upload`. At most 10 files per session; they are kept in
+memory only and count towards the server's memory budget. Returns `{"file": {...}, "session": {...}}`;
+`file` has `id`, `name`, `size`, `format`, `sheet`, `rows`, `columns`, `warnings`, `added_at`.
+`GET /api/session` lists added files under `files`.
+
+### `GET /api/files/{file_id}[?rows=10]`
+
+The file's details plus `preview: {columns, rows}` with its first rows (max 50).
+
+### `DELETE /api/files/{file_id}`
+
+Removes the file and returns the session info. Steps already applied with it keep their result.
+
+### Combining: the `combine_files` operation
+
+Preview and apply it like any other operation:
+
+```json
+{"operation": {"type": "combine_files", "file_id": "3f2a9c1b7d4e", "mode": "append", "source_column": "source_file"}}
+{"operation": {"type": "combine_files", "file_id": "3f2a9c1b7d4e", "mode": "join",
+               "keys": [{"left": "email", "right": "Email"}], "how": "left",
+               "loose_keys": true, "duplicates": "first", "columns": ["city"], "suffix": "_2"}}
+```
+
+- `append`: rows of the other file go below the working data; columns are matched by name. A column
+  in only one file is empty for the other file's rows; a column with different types becomes text.
+  Blocked when the files share no column name.
+- `join`: `how` = `left` (keep every row), `inner` (only matched rows; can remove rows, so it needs a
+  preview token) or `outer` (also add unmatched rows of the other file). `duplicates` = `first` (like
+  VLOOKUP) or `all` (one row per match). Empty keys never match. Brought columns whose name already
+  exists get `suffix`. Results above 5 million rows / 100 million cells are blocked.
+- Existing rows keep their row numbers; added rows get new numbers after the highest one.
+- `changes.added_rows` in the preview shows a sample of the rows that would be added.
+- Recipes and "continue where you left off" leave these steps out (they never contain the other
+  file); the AI assistant never plans them.
+
 ## Dataset
 
 ### `GET /api/profile?dataset=current|original[&light=true]`

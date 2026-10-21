@@ -54,11 +54,12 @@ export function saveWork(info: SessionInfo, now = Date.now()): void {
   if (!store) return;
   const key = workKey(info.file);
   try {
-    if (!info.history.length) {
+    // Combining needs the other file, which is never saved, so those steps cannot be replayed.
+    const steps = info.history.filter((h) => h.type !== "combine_files").map((h) => h.params as unknown as Operation);
+    if (!steps.length) {
       store.removeItem(key);
       return;
     }
-    const steps = info.history.map((h) => h.params as unknown as Operation);
     store.setItem(key, JSON.stringify({ file: info.file.name, savedAt: now, steps } satisfies SavedWork));
     // Keep only the most recent files.
     const others = allKeys(store)

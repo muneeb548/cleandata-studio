@@ -80,6 +80,7 @@ def test_openapi_documents_every_endpoint():
         "/api/export": {"get"}, "/api/health": {"get"}, "/api/config": {"get"}, "/api/values": {"get"},
         "/api/quick-clean/plan": {"get"}, "/api/quick-clean/preview": {"post"}, "/api/quick-clean/apply": {"post"},
         "/api/report": {"get"}, "/api/recipe": {"get"},
+        "/api/files": {"post"}, "/api/files/{file_id}": {"get", "delete"},
         "/api/ai/status": {"get"}, "/api/ai/plan": {"post"}, "/api/ai/map-values": {"post"}, "/api/ai/summary": {"post"}, "/api/ai/ask": {"post"},
     }
     for path, methods in expected.items():
@@ -242,7 +243,8 @@ def test_operations_catalog():
     r = client.get("/api/operations")
     assert r.status_code == 200
     types = {o["type"]: o for o in r.json()}
-    assert len(types) == 19 and types["remove_duplicates"]["may_remove_data"] is True
+    assert len(types) == 20 and types["remove_duplicates"]["may_remove_data"] is True
+    assert types["combine_files"]["may_remove_data"] is True  # an inner join removes unmatched rows
     assert types["organize_columns"]["may_remove_data"] is True and types["sort_rows"]["may_remove_data"] is False
     assert types["trim_whitespace"]["may_remove_data"] is False
 

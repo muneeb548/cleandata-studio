@@ -31,6 +31,7 @@ from app.schemas.operations import (  # noqa: E402,F401
     CleanColumnNames,
     CleanEmail,
     CleanNumbers,
+    CombineFiles,
     ConvertType,
     FindReplace,
     FlagRows,
@@ -52,7 +53,8 @@ from app.schemas.operations import (  # noqa: E402,F401
 
 DESTRUCTIVE_TYPES = {"remove_duplicates", "remove_empty"}
 # Operation types that can remove rows or columns with at least one of their settings.
-DATA_LOSS_TYPES = DESTRUCTIVE_TYPES | {"missing_values", "split_column", "merge_columns", "near_duplicates", "organize_columns"}
+DATA_LOSS_TYPES = DESTRUCTIVE_TYPES | {"missing_values", "split_column", "merge_columns", "near_duplicates", "organize_columns",
+                                       "combine_files"}
 
 
 def is_destructive(op: BaseModel) -> bool:
@@ -67,6 +69,8 @@ def is_destructive(op: BaseModel) -> bool:
         return op.action == "remove"
     if op.type == "organize_columns":
         return bool(op.drop)
+    if op.type == "combine_files":
+        return op.mode == "join" and op.how == "inner"  # rows without a match are removed
     return op.type == "missing_values" and op.strategy in ("drop_rows", "drop_columns")
 
 
@@ -86,7 +90,8 @@ class OpResult:
     @property
     def changed(self) -> bool:
         return bool(self.rows_removed or self.columns_removed or self.cells_changed or self.details.get("renamed")
-                    or self.details.get("added_columns") or self.details.get("reordered"))
+                    or self.details.get("added_columns") or self.details.get("reordered")
+                    or self.details.get("rows_added"))
 
 
 # --------------------------------------------------------------------------- helpers
@@ -1352,6 +1357,7 @@ HANDLERS = {
     "flag_rows": flag_rows,
     "organize_columns": organize_columns,
     "sort_rows": sort_rows,
+    "combine_files": None,  # needs the session's added files: see run_operation
 }
 
 LABELS = {
@@ -1374,10 +1380,17 @@ LABELS = {
     "flag_rows": "Flag rows for review",
     "organize_columns": "Organize columns",
     "sort_rows": "Sort rows",
+    "combine_files": "Combine files",
 }
 
 
-def run_operation(df: pd.DataFrame, op: BaseModel) -> OpResult:
+def run_operation(df: pd.DataFrame, op: BaseModel, ctx=None) -> OpResult:
+    """Run one operation. `ctx` (a combine.CombineContext) gives Combine files access to the
+    other files added to the session; every other operation only needs the data itself."""
+    if op.type == "combine_files":
+        from app.services.combine import combine_files
+
+        return combine_files(df, op, ctx)
     handler = HANDLERS[op.type]
     return handler(df, op)
 

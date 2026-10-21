@@ -61,7 +61,7 @@ def test_catalog_matches_schema_and_lists_every_operation():
         "clean_column_names", "convert_type", "remove_empty", "find_replace",
         "split_column", "merge_columns", "standardize_phone", "standardize_country", "flag_rows",
         "clean_email", "clean_numbers", "map_values", "near_duplicates",
-        "organize_columns", "sort_rows",
+        "organize_columns", "sort_rows", "combine_files",
     }
     mv = next(c for c in catalog if c["type"] == "missing_values")
     assert mv["may_remove_data"] and "strategy" in mv["required"]

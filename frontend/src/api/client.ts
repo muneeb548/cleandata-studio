@@ -6,6 +6,8 @@ import type {
   AiSummary,
   AppConfig,
   ApplyResult,
+  AttachedFile,
+  AttachedFilePreview,
   ChangeReport,
   ColumnValues,
   CompareResult,
@@ -192,6 +194,33 @@ export function uploadFile(file: File, options: UploadOptions = {}, onProgress?:
   });
 }
 
+/** Add another file to the current session (Combine files), with progress like uploadFile. */
+export function addFile(file: File, options: UploadOptions = {}, onProgress?: (fraction: number) => void, signal?: AbortSignal) {
+  return new Promise<{ file: AttachedFile; session: SessionInfo }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}/api/files${qs({ filename: file.name, format: options.format, sheet: options.sheet?.trim() })}`);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    const sid = getSessionId();
+    if (sid) xhr.setRequestHeader("X-Session-Id", sid);
+    xhr.responseType = "json";
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response as { file: AttachedFile; session: SessionInfo });
+      else {
+        const error = parseErrorBody(xhr.status, xhr.response);
+        if (SESSION_GONE.has(error.code) && sid) window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT));
+        reject(error);
+      }
+    };
+    xhr.onerror = () => reject(parseErrorBody(0, null));
+    xhr.onabort = () => reject(new ApiError("Upload cancelled.", "aborted", 0));
+    signal?.addEventListener("abort", () => xhr.abort());
+    xhr.send(file);
+  });
+}
+
 export const api = {
   config: () => request<AppConfig>("/api/config"),
   session: () => request<SessionInfo>("/api/session"),
@@ -246,6 +275,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ operation, preview_token: previewToken ?? undefined }),
     }),
+  filePreview: (id: string) => request<AttachedFilePreview>(`/api/files/${encodeURIComponent(id)}`),
+  removeFile: (id: string) => request<SessionInfo>(`/api/files/${encodeURIComponent(id)}`, { method: "DELETE" }),
   history: () => request<HistoryResponse>("/api/history"),
   undo: () => request<{ undone: HistoryItem; session: SessionInfo }>("/api/undo", { method: "POST" }),
   reset: () => request<{ steps_removed: number; session: SessionInfo }>("/api/reset", { method: "POST" }),

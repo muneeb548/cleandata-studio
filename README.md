@@ -39,6 +39,7 @@ CleanData Studio is a web application for cleaning messy tabular data without wr
   - Clean amounts in any currency and number style (`$1,250.00`, `Rs 1,25,000`, `1.234,56 €`, `(500)`) into real numbers, with a warning when one column mixes currencies
   - Find near-duplicates (same record written differently, optional small spelling differences) and flag or remove them
   - Flag rows for review in a new column (missing, invalid email or phone, not a number or date, repeated value, outside an allowed range such as age 0–100 or dates in 2024) without changing any data
+  - Combine files: add another CSV, Excel or JSON file to the session, then either add its rows below yours (columns matched by name, optional "source file" column) or add its columns to matching rows like Excel VLOOKUP (match on up to five columns, ignoring capitals and spaces if wanted; keep all rows, only matched rows, or all rows from both files; first match or every match). The other file is never changed; the result can be undone like any step
   - Organize columns: rename, remove and reorder them (for CRM imports), and sort rows by up to five columns (numbers, dates and text each sorted correctly; the download keeps the order)
   - Mark words such as "Unknown" or "TBD" as missing; amounts written in words ("thirty", "1.5 million") become numbers in Clean numbers
 - **Workflow safety** — original dataset never modified; undo last step; reset to original; confirmation dialogs for destructive steps; activity log; operations that change nothing are not recorded as applied.

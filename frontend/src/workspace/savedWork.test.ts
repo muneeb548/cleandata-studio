@@ -58,4 +58,13 @@ describe("continue where you left off", () => {
     localStorage.setItem(workKey(info(0).file), "{not json");
     expect(loadWork(info(0).file)).toBeNull();
   });
+
+  it("never saves Combine files steps, which need the other file", () => {
+    const i = info(1);
+    i.history.push({ ...i.history[0], id: "c", type: "combine_files", params: { type: "combine_files", file_id: "x", mode: "append" } });
+    saveWork(i, 1000);
+    expect(loadWork(i.file, 2000)?.steps).toEqual([{ type: "trim_whitespace", columns: [] }]);
+    saveWork({ ...i, history: [i.history[1]] }, 3000);
+    expect(loadWork(i.file, 4000)).toBeNull();
+  });
 });

@@ -344,6 +344,55 @@ class SortRows(_Op):
     missing: Literal["last", "first"] = Field("last", description="Where rows with an empty value go.")
 
 
+class JoinKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    left: ColumnName = Field(description="Column in the working data.")
+    right: ColumnName = Field(description="Column in the other file with the same values.")
+
+
+class CombineFiles(_Op):
+    """Combine the working data with another file added to this session.
+
+    append: add the other file's rows below (columns are matched by name).
+    join: add the other file's columns to matching rows, like Excel VLOOKUP (rows matched by key columns).
+    """
+
+    type: Literal["combine_files"]
+    file_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    mode: Literal["append", "join"] = "append"
+    # append
+    source_column: NewColumnName | None = Field(
+        None, description="append: optional new column that records which file each row came from."
+    )
+    # join
+    keys: Annotated[list[JoinKey], Field(max_length=5)] = Field(
+        default_factory=list, description="join: columns whose values must be equal for two rows to match."
+    )
+    how: Literal["left", "inner", "outer"] = Field(
+        "left", description="join: left keeps every row of the working data; inner keeps only matched rows; "
+                            "outer also adds rows of the other file that matched nothing."
+    )
+    loose_keys: bool = Field(True, description="join: ignore capitals and extra spaces when comparing keys.")
+    duplicates: Literal["first", "all"] = Field(
+        "first", description="join: when a key appears several times in the other file, use the first match "
+                             "(like VLOOKUP) or every match (rows are repeated)."
+    )
+    columns: ColumnList = Field(
+        default_factory=list, description="join: columns to bring from the other file. Empty = all except the keys."
+    )
+    suffix: Annotated[str, StringConstraints(min_length=1, max_length=50)] = Field(
+        "_2", description="join: added to a brought column whose name is already used."
+    )
+
+    @field_validator("source_column")
+    @classmethod
+    def _check_source(cls, value: str | None) -> str | None:
+        if value is None or value.strip() == "":
+            return None
+        return _clean_new_name(value)
+
+
 Operation = Annotated[
     Union[
         RemoveDuplicates,
@@ -365,6 +414,7 @@ Operation = Annotated[
         FlagRows,
         OrganizeColumns,
         SortRows,
+        CombineFiles,
     ],
     Field(discriminator="type"),
 ]
@@ -373,7 +423,7 @@ OPERATION_MODELS: dict[str, type[_Op]] = {
     m.model_fields["type"].annotation.__args__[0]: m  # type: ignore[union-attr]
     for m in (RemoveDuplicates, MissingValues, TrimWhitespace, StandardizeText, CleanColumnNames, ConvertType, RemoveEmpty,
               FindReplace, SplitColumn, MergeColumns, StandardizePhone, StandardizeCountry, CleanEmail, CleanNumbers, MapValues, NearDuplicates, FlagRows,
-              OrganizeColumns, SortRows)
+              OrganizeColumns, SortRows, CombineFiles)
 }
 
 

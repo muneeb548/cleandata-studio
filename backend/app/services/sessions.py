@@ -58,6 +58,30 @@ class HistoryEntry:
         return data
 
 
+@dataclass
+class AttachedFile:
+    """Another file added to the session so it can be combined with the working data.
+
+    It is never cleaned itself and lives in memory only, like the main upload."""
+
+    id: str
+    name: str
+    size: int
+    format: str
+    sheet: str | None
+    df: pd.DataFrame
+    warnings: list[str]
+    added_at: float
+    bytes: int = 0
+
+    def public(self) -> dict:
+        return {
+            "id": self.id, "name": self.name, "size": self.size, "format": self.format, "sheet": self.sheet,
+            "rows": len(self.df), "columns": [str(c) for c in self.df.columns], "warnings": self.warnings,
+            "added_at": self.added_at,
+        }
+
+
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$")
 
 
@@ -107,11 +131,14 @@ class Session:
     original_bytes: int = 0
     # AI assistant requests made for this file (see AI_MAX_CALLS_PER_SESSION).
     ai_calls: int = 0
+    # Other files added to combine with this one (append rows / join columns), by id.
+    files: dict[str, AttachedFile] = field(default_factory=dict)
 
     @property
     def memory_bytes(self) -> int:
-        """Estimated memory held by this session: the original plus stored undo snapshots."""
-        return self.original_bytes + sum(h.bytes for h in self.history if h.df is not None)
+        """Estimated memory held by this session: the original, stored undo snapshots and added files."""
+        return (self.original_bytes + sum(h.bytes for h in self.history if h.df is not None)
+                + sum(f.bytes for f in self.files.values()))
 
     # ------------------------------------------------------------------ previews
 
@@ -216,7 +243,15 @@ class SessionStore:
     def total_bytes(self) -> int:
         return sum(s.memory_bytes for s in list(self._sessions.values()))
 
-    def _make_room(self, needed: int) -> None:
+    def reserve(self, session: Session, extra: int) -> None:
+        """Make room in the server-wide memory budget for `extra` bytes that `session` is about
+        to hold (an added file). Never removes `session` itself; refuses when there is no room."""
+        if not self.max_total_bytes:
+            return
+        with self._lock:
+            self._make_room(session.memory_bytes + extra, exclude=session.id, count_new=False)
+
+    def _make_room(self, needed: int, exclude: str | None = None, count_new: bool = True) -> None:
         """Remove least recently used sessions until the new one fits. Sessions used in the
         last `protect_seconds` are never removed; if nothing can be removed, the new upload
         is refused instead of taking someone's data away mid-task. Caller holds the lock."""
@@ -226,13 +261,15 @@ class SessionStore:
                            "Try a smaller file, or split it into parts.", status=413)
 
         def over() -> bool:
-            if len(self._sessions) >= self.max_sessions:
+            if count_new and len(self._sessions) >= self.max_sessions:
                 return True
-            return bool(self.max_total_bytes) and self.total_bytes() + needed > self.max_total_bytes
+            others = sum(s.memory_bytes for sid, s in list(self._sessions.items()) if sid != exclude)
+            return bool(self.max_total_bytes) and others + needed > self.max_total_bytes
 
         now = time.time()
         while over():
-            removable = [s for s in self._sessions.values() if now - s.last_access >= self.protect_seconds]
+            removable = [s for s in self._sessions.values()
+                         if s.id != exclude and now - s.last_access >= self.protect_seconds]
             if not removable:
                 raise AppError("server_busy", "The server is busy with other people's datasets right now.",
                                "Please try again in a few minutes, or try a smaller file.", status=503)
