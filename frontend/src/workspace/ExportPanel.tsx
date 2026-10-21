@@ -14,10 +14,12 @@ import { KeyValue } from "./shared";
 import { AiSummaryCard } from "./Ai";
 import { ChangeReportCard } from "./QuickClean";
 import { RecipeCard } from "./Recipes";
+import { DeleteDataButton } from "./DeleteDataButton";
 import { useWorkspace } from "./WorkspaceContext";
 
 export function ExportPanel() {
-  const { info, handleError, setTab } = useWorkspace();
+  const { info, config, handleError, setTab } = useWorkspace();
+  const [downloaded, setDownloaded] = useState(false);
   const toast = useToast();
   const [name, setName] = useState("");
   const [bom, setBom] = useState(false);
@@ -45,6 +47,7 @@ export function ExportPanel() {
     try {
       const saved = await api.exportFile(name, format, bom, protectFormulas, includeReport && history.length > 0, highlight);
       toast({ tone: "success", title: "Download ready", description: `${saved} was generated from the current working data.` });
+      setDownloaded(true);
     } catch (err) {
       const e = toApiError(err);
       if (SESSION_GONE.has(e.code)) handleError(e);
@@ -170,6 +173,11 @@ export function ExportPanel() {
           <Button size="lg" onClick={download} loading={busy} disabled={format === "xlsx" && excelTooBig} className="w-full sm:w-auto">
             <Download /> {busy ? "Preparing download…" : `Download ${format === "csv" ? "CSV" : "Excel"}`}
           </Button>
+          {downloaded && (
+            <Alert tone="success" title="Finished with this file?" action={<DeleteDataButton />}>
+              Delete it from the server now instead of waiting {config?.session_ttl_minutes ?? 30} minutes.
+            </Alert>
+          )}
         </CardContent>
       </Card>
       </div>

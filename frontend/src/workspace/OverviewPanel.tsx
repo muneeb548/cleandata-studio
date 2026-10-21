@@ -26,7 +26,7 @@ import { Table, TableContainer, TD, TH, THead, TR } from "@/components/ui/table"
 import { cn, formatNumber, formatPercent, pluralize } from "@/lib/utils";
 import { AskAiButton, ChatWithDataButton } from "./Ai";
 import { QuickCleanButton } from "./QuickClean";
-import { ApplyRecipeButton } from "./Recipes";
+import { ApplyRecipeButton, ResumeBanner } from "./Recipes";
 import { DatasetToggle, TypeBadge, typeLabel } from "./shared";
 import { useAsync } from "./useAsync";
 import { useWorkspace } from "./WorkspaceContext";
@@ -197,6 +197,7 @@ export function OverviewPanel() {
   const applied = info?.history.length ?? 0;
 
   const header = (
+    <>
     <PageHeader
       title="Overview"
       description={
@@ -216,6 +217,8 @@ export function OverviewPanel() {
         </div>
       }
     />
+    <ResumeBanner />
+    </>
   );
 
   if (!profile && loading)

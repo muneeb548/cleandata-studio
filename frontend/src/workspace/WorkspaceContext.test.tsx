@@ -33,13 +33,14 @@ const session = (history: number): SessionInfo => ({
 let resolveUndo: (v: unknown) => void = () => undefined;
 const undo = vi.fn(() => new Promise((r) => (resolveUndo = r)));
 const reset = vi.fn(async () => ({ session: session(0) }));
+const endSession = vi.fn(async () => null);
 
 vi.mock("@/api/client", async (orig) => {
   const actual = await orig<typeof import("@/api/client")>();
   return {
     ...actual,
     getSessionId: () => "sid",
-    api: { ...actual.api, session: vi.fn(async () => session(2)), undo: () => undo(), reset: () => reset() },
+    api: { ...actual.api, session: vi.fn(async () => session(2)), undo: () => undo(), reset: () => reset(), endSession: () => endSession() },
   };
 });
 
@@ -52,6 +53,8 @@ function Probe() {
       <p data-testid="pending">{ws.pending ?? "idle"}</p>
       <button onClick={() => void ws.undo()}>undo</button>
       <button onClick={() => void ws.reset()}>reset</button>
+      <button onClick={() => void ws.deleteData()}>delete</button>
+      <p data-testid="notice">{ws.notice ?? ""}</p>
     </div>
   );
 }
@@ -93,5 +96,16 @@ describe("Undo and Reset", () => {
     await waitFor(() => expect(screen.getByTestId("history")).toHaveTextContent("0"));
     expect(reset).toHaveBeenCalledTimes(1);
     expect(await screen.findByText("Dataset reset to the original upload")).toBeInTheDocument();
+  });
+});
+
+describe("Delete my data now", () => {
+  it("deletes the session on the server and returns to the upload screen", async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId("history")).toHaveTextContent("2"));
+    await userEvent.click(screen.getByText("delete"));
+    expect(endSession).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId("history")).toHaveTextContent("none"));
+    expect(screen.getByTestId("notice")).toHaveTextContent("deleted from the server");
   });
 });

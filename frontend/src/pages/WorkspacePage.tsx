@@ -25,6 +25,7 @@ import { cn, formatBytes, formatNumber, pluralize } from "@/lib/utils";
 import { CleanPanel } from "@/workspace/CleanPanel";
 import { ComparePanel } from "@/workspace/ComparePanel";
 import { DataPanel } from "@/workspace/DataPanel";
+import { DeleteDataButton } from "@/workspace/DeleteDataButton";
 import { ExportPanel } from "@/workspace/ExportPanel";
 import { OverviewPanel } from "@/workspace/OverviewPanel";
 import { UploadPanel } from "@/workspace/UploadPanel";
@@ -252,6 +253,7 @@ function Sidebar() {
             </Link>
           </span>
         </p>
+        <DeleteDataButton className="w-full" />
       </div>
     </aside>
   );

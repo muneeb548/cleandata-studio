@@ -52,6 +52,12 @@ export function PrivacyPage() {
               ? `A session is deleted after ${limits.ttl} minutes without activity.`
               : "A session is deleted after a period of inactivity."}
           </li>
+          <li>“Delete my data now” in the workspace removes the file, the cleaned data and the history at once.</li>
+          <li>
+            So you can continue another day, the list of steps you applied (not the data) is kept in your own browser for two
+            weeks. Upload the same file again and choose “Continue where I left off”. Some steps can include values you typed,
+            such as a find-and-replace text. “Start fresh” or “Delete my data now” removes them.
+          </li>
           <li>Starting over with a new file deletes the previous session.</li>
           <li>Restarting or updating the server deletes all sessions, so a session can also end earlier.</li>
           <li>When the server is busy, a session that has not been used for a while may be deleted to make room for new uploads.</li>

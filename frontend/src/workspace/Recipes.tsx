@@ -214,3 +214,61 @@ export function ApplyRecipeButton() {
     </>
   );
 }
+
+/** Overview page: offers to replay the steps saved in this browser when the same file is uploaded again. */
+export function ResumeBanner() {
+  const { resume, dismissResume, onSessionChanged, handleError } = useWorkspace();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  if (!resume) return null;
+
+  const when = new Date(resume.savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+  const carryOn = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const preview = await api.quickCleanPreview(resume.steps);
+      if (preview.blocked) {
+        setProblem(preview.blocked);
+        return;
+      }
+      const res = await api.quickCleanApply(resume.steps, preview.preview_token);
+      onSessionChanged(res.session);
+      toast({ tone: "success", title: "Back where you left off", description: `${pluralize(res.applied, "step")} applied again. Each one can be undone.` });
+    } catch (err) {
+      const e = toApiError(err);
+      if (SESSION_GONE.has(e.code)) handleError(e);
+      else setProblem(e.hint ? `${e.message} ${e.hint}` : e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Alert
+      tone={problem ? "warning" : "info"}
+      title={problem ? "The saved steps could not be applied to this file" : "You worked on this file before"}
+      action={
+        <div className="flex flex-wrap gap-2">
+          {!problem && (
+            <Button size="sm" onClick={() => void carryOn()} loading={busy}>
+              {!busy && <Check />} Continue where I left off
+            </Button>
+          )}
+          <Button size="sm" variant="secondary" disabled={busy} onClick={() => dismissResume(true)}>
+            Start fresh
+          </Button>
+        </div>
+      }
+    >
+      {problem ?? (
+        <>
+          {pluralize(resume.steps.length, "step")} saved in this browser on {when}:{" "}
+          {resume.steps.map((s) => stepLabel(s)).join(", ")}. Only the steps were saved, never the data.
+        </>
+      )}
+    </Alert>
+  );
+}
