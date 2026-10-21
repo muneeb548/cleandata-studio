@@ -58,9 +58,10 @@ export function ProgressBar({ value, label }: { value: number; label: string }) 
 }
 
 /** Small inline meter for completeness percentages. */
-export function Meter({ value, className }: { value: number | null; className?: string }) {
+/** A small progress bar. `warn` turns a high value amber, e.g. a column that is full but has problems. */
+export function Meter({ value, className, warn = false }: { value: number | null; className?: string; warn?: boolean }) {
   const pct = value === null ? 0 : Math.max(0, Math.min(100, value));
-  const color = pct >= 95 ? "bg-success" : pct >= 70 ? "bg-amber-500" : "bg-danger";
+  const color = pct < 70 ? "bg-danger" : pct < 95 || warn ? "bg-amber-500" : "bg-success";
   return (
     <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-muted", className)} aria-hidden="true">
       <div className={cn("h-full rounded-full", color)} style={{ width: `${pct}%` }} />

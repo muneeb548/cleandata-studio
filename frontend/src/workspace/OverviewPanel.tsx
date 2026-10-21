@@ -189,6 +189,31 @@ function TypeSummary({ profile }: { profile: Profile }) {
   );
 }
 
+/** The problems (not notes) found in one column, without the repeated ' in "column"' ending. */
+export function problemTitles(issues: Issue[], column: string): string[] {
+  const suffix = ` in "${column}"`;
+  return issues
+    .filter((i) => i.column === column && i.severity !== "info")
+    .map((i) => (i.title.endsWith(suffix) ? i.title.slice(0, -suffix.length) : i.title));
+}
+
+function ColumnProblems({ count, titles }: { count: number; titles: string[] }) {
+  return (
+    <div className="min-w-0 max-w-64">
+      <Badge tone="warning">{pluralize(count, "problem")}</Badge>
+      {titles.length > 0 && (
+        <ul className="mt-1 space-y-0.5 text-caption text-slate-600">
+          {titles.map((t, i) => (
+            <li key={i} className="truncate" title={t}>
+              {t}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function OverviewPanel() {
   const { version, info } = useWorkspace();
   const [dataset, setDataset] = useState<DatasetKind>("current");
@@ -286,7 +311,7 @@ export function OverviewPanel() {
         />
         <StatCard icon={Copy} label="Duplicate rows" value={formatNumber(s.duplicate_rows)} tone={s.duplicate_rows ? "warning" : "success"} hint={s.duplicate_rows ? "exact copies" : "none found"} />
         <StatCard icon={Columns3} label="Columns with gaps" value={formatNumber(gapColumns)} tone={gapColumns ? "warning" : "success"} hint="contain missing values" />
-        <StatCard icon={Gauge} label="Completeness" value={formatPercent(completeness)} tone={completeness === null ? "neutral" : completeness >= 95 ? "success" : "warning"} hint={looksEmpty ? "N/A-style cells count as missing" : "non-missing cells"} />
+        <StatCard icon={Gauge} label="Completeness" value={formatPercent(completeness)} tone={completeness === null ? "neutral" : completeness >= 95 ? "success" : "warning"} hint={looksEmpty ? "cells filled in (N/A-style counts as empty)" : "cells filled in, not checked for errors"} />
       </section>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
@@ -348,7 +373,12 @@ export function OverviewPanel() {
       <Card>
         <CardHeader>
           <CardTitle>Column completeness</CardTitle>
-          <CardDescription>Real values per column ("N/A", "null" and space-only cells count as missing), unique values, type and detected problems.</CardDescription>
+          <CardDescription>
+            <strong className="font-medium text-slate-700">Completeness</strong> is the share of cells that are filled in ("N/A", "null" and
+            space-only cells count as empty). 100% means no empty cells, not that the values are correct.{" "}
+            <strong className="font-medium text-slate-700">Problems</strong> lists what is wrong with the values that are there, such as
+            mixed date formats or different spellings.
+          </CardDescription>
         </CardHeader>
         {profile.columns.length === 0 ? (
           <EmptyState title="No columns in this dataset" />
@@ -362,7 +392,9 @@ export function OverviewPanel() {
                   <TH scope="col" className="text-right">Missing</TH>
                   <TH scope="col" className="text-right">Unique</TH>
                   <TH scope="col">Problems</TH>
-                  <TH scope="col" className="w-1/4 pr-5">Completeness</TH>
+                  <TH scope="col" className="w-1/4 pr-5">
+                    Completeness <span className="font-normal normal-case text-muted-foreground">(cells filled in)</span>
+                  </TH>
                 </tr>
               </THead>
               <tbody>
@@ -381,7 +413,7 @@ export function OverviewPanel() {
                     <TD className="tabular text-right">{formatNumber(c.unique)}</TD>
                     <TD>
                       {c.issues === undefined ? null : c.issues ? (
-                        <Badge tone="warning">{pluralize(c.issues, "problem")}</Badge>
+                        <ColumnProblems count={c.issues} titles={problemTitles(profile.issues, c.name)} />
                       ) : (
                         <span className="inline-flex items-center gap-1 text-caption text-success">
                           <CheckCircle2 className="size-3.5" aria-hidden="true" /> OK
@@ -390,9 +422,12 @@ export function OverviewPanel() {
                     </TD>
                     <TD className="pr-5">
                       <div className="flex items-center gap-3">
-                        <Meter value={c.completeness} className="flex-1" />
+                        <Meter value={c.completeness} warn={!!c.issues} className="flex-1" />
                         <span className="tabular w-14 text-right text-caption text-slate-600">{formatPercent(c.completeness)}</span>
                       </div>
+                      {!!c.issues && c.completeness !== null && c.completeness >= 99.995 && (
+                        <span className="mt-0.5 block text-caption text-amber-800">Every cell is filled, but some values need fixing.</span>
+                      )}
                     </TD>
                   </TR>
                 ))}
