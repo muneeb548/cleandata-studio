@@ -164,3 +164,21 @@ def test_plain_excel_has_no_colour_key(frame, tmp_path):
     path = tmp_path / "plain.xlsx"
     exporters.write_xlsx(frame("a\n1\n"), str(path))
     assert openpyxl.load_workbook(path).sheetnames == ["Cleaned data"]
+
+
+def test_excel_download_is_readable(frame, tmp_path):
+    """Wide enough columns, real numbers for IDs, dates without 00:00:00, and codes with a leading zero kept as text."""
+    import datetime as dt
+
+    data = frame("order_id,customer,phone,zip,price,joined\n"
+                 "1001,Emma Watson-Smithington,0300-1234567,04101,12.50,2026-01-15\n"
+                 "1002,Ali,+92 321 7654321,10001,7,2026-01-16\n")
+    data["joined"] = pd.to_datetime(data["joined"])
+    path = tmp_path / "readable.xlsx"
+    exporters.write_xlsx(data, str(path))
+    ws = openpyxl.load_workbook(path)["Cleaned data"]
+    assert [c.value for c in ws[2]] == [1001, "Emma Watson-Smithington", "0300-1234567", "04101", 12.5,
+                                        dt.datetime(2026, 1, 15)]
+    assert ws["F2"].number_format == "yyyy-mm-dd"
+    assert ws.column_dimensions["B"].width >= len("Emma Watson-Smithington")
+    assert ws.column_dimensions["A"].width >= 8 and ws.freeze_panes == "A2"

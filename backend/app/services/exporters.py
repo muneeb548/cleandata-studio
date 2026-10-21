@@ -95,13 +95,64 @@ def write_csv(df: pd.DataFrame, path: str, *, bom: bool = False) -> None:
     df.to_csv(path, index=False, lineterminator="\n", encoding=encoding, chunksize=CHUNK_ROWS)
 
 
-def _python_values(col: pd.Series) -> list:
-    """Column values as plain Python objects, with missing values as None."""
+def _python_values(col: pd.Series, kind: str | None = None) -> list:
+    """Column values as plain Python objects, with missing values as None.
+
+    kind="date": dates without a time are written as dates (Excel shows 2026-01-15, not 00:00:00).
+    kind="number": text that is a plain number is written as a real number.
+    """
     if pd.api.types.is_datetime64_any_dtype(col):
-        values = [None if pd.isna(v) else v.to_pydatetime() for v in col]
-        return values
+        if kind == "date":
+            return [None if pd.isna(v) else v.date() for v in col]
+        return [None if pd.isna(v) else v.to_pydatetime() for v in col]
+    if kind == "number":
+        numbers = pd.to_numeric(col, errors="coerce")
+        whole = numbers.dropna()
+        if len(whole) and bool((whole == whole.round()).all()) and not col.str.contains(".", regex=False).any():
+            return [None if pd.isna(v) else int(v) for v in numbers]
+        return [None if pd.isna(v) else float(v) for v in numbers]
     out = col.astype(object)
     return out.where(col.notna(), None).tolist()
+
+
+# A plain number that Excel can store exactly: no leading zero (phone numbers, zip codes and
+# codes like "0300" keep it, so they stay text), no "+", at most 15 digits.
+_PLAIN_NUMBER = re.compile(r"-?(?:0|[1-9]\d{0,14})(?:\.\d{1,10})?")
+
+
+def excel_kinds(df: pd.DataFrame) -> list[str | None]:
+    """Per column: "date", "number" or None (written as it is)."""
+    kinds: list[str | None] = []
+    for j in range(df.shape[1]):
+        s = df.iloc[:, j]
+        kind = None
+        if pd.api.types.is_datetime64_any_dtype(s):
+            values = s.dropna()
+            if len(values) and bool((values == values.dt.normalize()).all()):
+                kind = "date"
+        elif pd.api.types.is_string_dtype(s) and not pd.api.types.is_bool_dtype(s):
+            values = s.dropna()
+            if len(values) and bool(values.str.fullmatch(_PLAIN_NUMBER).fillna(False).all()):
+                kind = "number"
+        kinds.append(kind)
+    return kinds
+
+
+def column_widths(df: pd.DataFrame, kinds: list[str | None], sample: int = 2000) -> list[float]:
+    """Excel column widths that fit the header and the longest value in the first rows (8 to 50)."""
+    widths = []
+    head = df.head(sample)
+    for j, name in enumerate(df.columns):
+        s = head.iloc[:, j]
+        if kinds[j] == "date":
+            longest = 10
+        elif pd.api.types.is_datetime64_any_dtype(s):
+            longest = 19
+        else:
+            text = s.dropna().astype(str)
+            longest = int(text.str.len().max()) if len(text) else 0
+        widths.append(float(min(50, max(8, len(str(name)), longest) + 2)))
+    return widths
 
 
 def write_xlsx(df: pd.DataFrame, path: str, *, report_lines: list[str] | None = None, highlight: bool = False) -> None:
@@ -128,8 +179,14 @@ def write_xlsx(df: pd.DataFrame, path: str, *, report_lines: list[str] | None = 
                        f"Excel sheets hold at most {EXCEL_MAX_COLS:,} columns; this dataset has {cols:,}.",
                        "Download as CSV instead.", status=422)
 
+    from openpyxl.utils import get_column_letter
+
     wb = Workbook(write_only=True)
     ws = wb.create_sheet("Cleaned data")
+    kinds = excel_kinds(df)
+    for j, width in enumerate(column_widths(df, kinds)):
+        ws.column_dimensions[get_column_letter(j + 1)].width = width
+    ws.freeze_panes = "A2"
 
     fills = {code: PatternFill("solid", start_color=colour, end_color=colour) for code, colour in HIGHLIGHT_COLOURS.items()}
     codes = highlight_codes(df) if highlight else None
@@ -161,7 +218,7 @@ def write_xlsx(df: pd.DataFrame, path: str, *, report_lines: list[str] | None = 
         ws.append([safe(n, n) for n in names])
         for start in range(0, rows, CHUNK_ROWS):
             chunk = df.iloc[start:start + CHUNK_ROWS]
-            columns = [_python_values(chunk.iloc[:, i]) for i in range(cols)]
+            columns = [_python_values(chunk.iloc[:, i], kinds[i]) for i in range(cols)]
             if codes is None:
                 for row in zip(*columns) if cols else ():
                     ws.append([safe(v, names[i]) for i, v in enumerate(row)])
@@ -178,11 +235,14 @@ def write_xlsx(df: pd.DataFrame, path: str, *, report_lines: list[str] | None = 
         raise
     if codes is not None:
         key = wb.create_sheet("Colour key")
+        for letter, width in (("A", 10), ("B", 100), ("C", 10)):
+            key.column_dimensions[letter].width = width
         key.append(["Colour", "Meaning", "Cells"])
         for label, code, meaning in HIGHLIGHT_KEY:
             key.append([coloured(label, code, key), meaning, int((codes == code).sum())])
     if report_lines:
         report = wb.create_sheet("Cleaning report")
+        report.column_dimensions["A"].width = 120
         for line in report_lines:
             cell = WriteOnlyCell(report, value=_ILLEGAL_XML.sub("", line)[:EXCEL_MAX_CELL_CHARS])
             cell.data_type = "s"  # always text, never a formula
