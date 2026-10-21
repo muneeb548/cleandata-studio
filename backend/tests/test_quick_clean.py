@@ -185,3 +185,31 @@ def test_mixed_currencies_are_not_ticked(frame):
     df = frame('price\n"$1,250"\n"€300"\n"$20"\n"Rs 500"\n')
     steps = [s for s in quick_clean.plan(df)["steps"] if s["operation"]["type"] == "clean_numbers"]
     assert steps and steps[0]["selected"] is False and "mixes currencies" in steps[0]["note"]
+
+
+def test_capitals_are_fixed_even_in_a_mostly_unique_column(frame):
+    """A city list where most values appear once still gets "lahore" → "Lahore" (the demo file case)."""
+    from app.services.quick_clean import plan
+
+    df = frame("order_id,city\n1,Lahore\n2,London\n3,Berlin\n4,lahore\n5,Dublin\n6,Karachi\n7,london\n")
+    steps = {s["title"]: s for s in plan(df)["steps"]}
+    step = steps['Use one spelling for each value in "city"']
+    assert step["selected"]
+    assert {m["value"]: m["to"] for m in step["operation"]["mappings"]} == {"lahore": "Lahore", "london": "London"}
+    assert not any("order_id" in t for t in steps)  # ID-like columns are never touched
+
+
+def test_demo_file_has_no_capitalisation_problems_left():
+    from pathlib import Path
+
+    from app.services import profiling
+    from app.services.csv_loader import load_csv
+    from app.services.operations import run_operation
+    from app.services.quick_clean import _OPERATION, plan
+
+    df = load_csv((Path(__file__).resolve().parents[2] / "demo_customers.csv").read_bytes()).df
+    for step in plan(df)["steps"]:
+        if step["selected"]:
+            df = run_operation(df, _OPERATION.validate_python(step["operation"])).df
+    left = [i["id"] for i in profiling.detect_issues(df) if i["severity"] != "info"]
+    assert not [i for i in left if i.startswith(("case:", "dates:", "placeholder:", "whitespace:", "emails:"))], left

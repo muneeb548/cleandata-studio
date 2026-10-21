@@ -55,17 +55,20 @@ def _email_columns(df: pd.DataFrame) -> list[str]:
 
 
 def _category_columns(df: pd.DataFrame, exclude: set[str]) -> list[str]:
-    """Text columns whose values repeat (city, status, gender...), where one spelling per word makes sense."""
+    """Text columns where one spelling per word makes sense (city, status, name...).
+
+    The mappings only join spellings that differ in capitals or outer spaces ("lahore" →
+    "Lahore"), so any text column qualifies, even one whose values are mostly unique like a
+    city list. ID-like columns (order_id, sku, code) are left alone, because "ab12" and
+    "AB12" can be different codes.
+    """
     cols = []
     for c in _text_columns(df):
-        if c in exclude:
+        if c in exclude or ID_NAME_RE.search(c):
             continue
         s = df[c].dropna().astype(STRING_DTYPE).str.strip()
         s = s[s != ""]
-        if len(s) < 4:
-            continue
-        distinct = s.str.lower().nunique()
-        if distinct <= 1000 and distinct <= 0.5 * len(s):
+        if len(s) >= 2:
             cols.append(c)
     return cols
 
@@ -178,7 +181,7 @@ def _candidates(df: pd.DataFrame) -> tuple[list[tuple[dict, str, bool, str | Non
                          "choose the country in Clean data → Contact details → Phone numbers.")
     for c in _category_columns(df, set(emails) | set(phones) | set(countries)):
         mappings = _spelling_mappings(df[c])
-        if mappings:
+        if 0 < len(mappings) <= 1000:  # the map_values limit; more than that is free text, not categories
             out.append(({"type": "map_values", "columns": [c], "ignore_case": True, "mappings": mappings},
                         f'Use one spelling for each value in "{c}"', True, None))
     date_ops, date_decisions = _date_candidates(df)
