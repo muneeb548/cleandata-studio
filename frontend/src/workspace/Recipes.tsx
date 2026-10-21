@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { BookOpen, Check, Download, Eye, FileUp } from "lucide-react";
 import { ApiError, SESSION_GONE, api } from "@/api/client";
-import type { Operation, QuickCleanPreview, Recipe } from "@/api/types";
+import type { HistoryItem, Operation, QuickCleanPreview, Recipe } from "@/api/types";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +18,24 @@ export function stepDetail(op: Operation): string {
   const cols = "columns" in op && Array.isArray(op.columns) && op.columns.length ? ` · ${op.columns.join(", ")}` : "";
   const col = "column" in op && typeof op.column === "string" ? ` · ${op.column}` : "";
   return cols || col;
+}
+
+/** Steps a recipe can hold. Combine files needs the other file, which a recipe never contains. */
+export const NOT_IN_RECIPE = new Set<string>(["combine_files"]);
+
+export function recipeCounts(history: Pick<HistoryItem, "type">[]): { saveable: number; leftOut: number } {
+  const leftOut = history.filter((h) => NOT_IN_RECIPE.has(h.type)).length;
+  return { saveable: history.length - leftOut, leftOut };
+}
+
+/** The text on the recipe card, depending on what was applied. */
+export function recipeCardText(saveable: number, leftOut: number): string {
+  const tail = "Next time the same client sends a new file, open it and choose Apply recipe on the Overview page. The recipe contains only the steps, never your data.";
+  const skipped = `${pluralize(leftOut, "Combine files step")} ${leftOut === 1 ? "is" : "are"} not saved, because a recipe never contains the other file.`;
+  if (!saveable && leftOut)
+    return `Combine files steps cannot be saved in a recipe, because a recipe never contains the other file. Apply other cleaning steps (trim, duplicates, …) to save a recipe.`;
+  const what = saveable ? pluralize(saveable, "step") : "steps";
+  return `Save the ${what} you applied as a small .json file. ${leftOut ? `${skipped} ` : ""}${tail}`;
 }
 
 /** Reads a recipe file and checks that it really is one, without trusting its contents. */
@@ -41,7 +59,7 @@ export function RecipeCard() {
   const { info, handleError } = useWorkspace();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const steps = info?.history.length ?? 0;
+  const { saveable, leftOut } = recipeCounts(info?.history ?? []);
 
   const save = async () => {
     setBusy(true);
@@ -54,8 +72,8 @@ export function RecipeCard() {
       a.download = `${stem}_recipe.json`;
       a.click();
       URL.revokeObjectURL(url);
-      const leftOut = recipe.left_out?.length ? ` ${pluralize(recipe.left_out.length, "Combine files step")} left out: the recipe never contains the other file.` : "";
-      toast({ tone: "success", title: "Recipe saved", description: `${pluralize(recipe.steps.length, "step")} saved. Apply it to the next file from the Overview page.${leftOut}` });
+      const skippedNote = recipe.left_out?.length ? ` ${pluralize(recipe.left_out.length, "Combine files step")} left out: the recipe never contains the other file.` : "";
+      toast({ tone: "success", title: "Recipe saved", description: `${pluralize(recipe.steps.length, "step")} saved. Apply it to the next file from the Overview page.${skippedNote}` });
     } catch (err) {
       handleError(err, "Could not save the recipe");
     } finally {
@@ -69,12 +87,10 @@ export function RecipeCard() {
         <CardTitle className="flex items-center gap-2">
           <BookOpen className="size-4 text-primary" aria-hidden="true" /> Cleaning recipe
         </CardTitle>
-        <CardDescription>
-          Save the {steps ? pluralize(steps, "step") : "steps"} you applied as a small .json file. Next time the same client sends a new file, open it and choose Apply recipe on the Overview page. The recipe contains only the steps, never your data.
-        </CardDescription>
+        <CardDescription>{recipeCardText(saveable, leftOut)}</CardDescription>
       </CardHeader>
       <CardContent>
-        <Button variant="secondary" onClick={save} loading={busy} disabled={!steps}>
+        <Button variant="secondary" onClick={save} loading={busy} disabled={!saveable}>
           {!busy && <Download />} Save recipe (.json)
         </Button>
       </CardContent>
