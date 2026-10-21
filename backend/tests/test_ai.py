@@ -350,3 +350,46 @@ def test_ask_refuses_a_plan_with_unknown_columns(use_ai):
     use_ai({**ASK_PLAN, "group_by": ["salary"]})
     r = client.post("/api/ai/ask", json={"question": "salary per city"}, headers=upload())
     assert r.status_code == 422 and r.json()["error"]["code"] == "ai_bad_plan"
+
+
+def test_local_model_gets_a_shorter_prompt(use_ai):
+    compact = ai.operation_guide(compact=True)
+    assert len(compact) < len(ai.operation_guide()) * 0.8
+    for name in ai.OPERATION_MODELS:
+        assert f"- {name} (" in compact
+    assert "format?:national|international|e164=international" in compact
+    fake = use_ai({"reply": "", "steps": []})
+    client.post("/api/ai/plan", json={"request": "clean"}, headers=upload())
+    assert compact in fake.calls[0]["system"]
+
+
+def test_code_like_reply_is_replaced(use_ai):
+    use_ai({"reply": "remove_duplicates(keep?:first|last=first), clean_email(columns?:[email])",
+            "steps": [step("remove_duplicates")]})
+    data = client.post("/api/ai/plan", json={"request": "dupes hatao"}, headers=upload()).json()
+    assert data["reply"].startswith("Here is a plan with 1 step.")
+
+
+def test_prompt_contains_a_worked_example():
+    import json as _json
+
+    example = ai.PLAN_SYSTEM.format(guide="G", max_steps=10).split("Answer:\n")[1]
+    parsed = _json.loads(example)
+    for s in parsed["steps"]:
+        ai.OPERATION.validate_python({"type": s["operation"], **_json.loads(s["settings"])})
+
+
+def test_map_values_fixes_wrong_capitals_from_the_model(use_ai):
+    body = "city\nIslamabad\nIslamabad\nISLAMABAD\nlahore\nLahore\nkarachi\nKarachi\nIsb\n"
+    use_ai({"mappings": [{"value": "Islamabad", "to": "ISLAMABAD"}, {"value": "Isb", "to": "ISLAMABAD"}]})
+    data = client.post("/api/ai/map-values", json={"column": "city"}, headers=upload(body)).json()
+    got = {m["value"]: m["to"] for m in data["mappings"]}
+    assert got == {"Isb": "Islamabad", "ISLAMABAD": "Islamabad", "lahore": "Lahore", "karachi": "Karachi"}
+
+
+def test_map_values_suggests_title_case_when_no_proper_spelling_exists(use_ai):
+    use_ai({"mappings": []})
+    data = client.post("/api/ai/map-values", json={"column": "city"}, headers=upload("city\nlahore\nLAHORE\nKarachi\nAB12\nab12\n")).json()
+    got = {m["value"]: m["to"] for m in data["mappings"]}
+    assert got["lahore"] == "Lahore" and got["LAHORE"] == "Lahore"
+    assert "AB12" not in got or got["AB12"] in ("AB12", "ab12")  # codes are not title-cased

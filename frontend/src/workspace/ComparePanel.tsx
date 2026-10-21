@@ -20,7 +20,7 @@ import { useWorkspace } from "./WorkspaceContext";
 const METRICS: { key: keyof Stats; label: string; better: "lower" | "higher" | "neutral"; pct?: boolean }[] = [
   { key: "rows", label: "Rows", better: "neutral" },
   { key: "columns", label: "Columns", better: "neutral" },
-  { key: "missing_cells", label: "Missing cells", better: "lower" },
+  { key: "missing_cells", label: "Empty cells", better: "lower" },
   { key: "duplicate_rows", label: "Duplicate rows", better: "lower" },
   { key: "columns_with_missing", label: "Columns with missing values", better: "lower" },
   { key: "empty_rows", label: "Completely empty rows", better: "lower" },
@@ -247,9 +247,9 @@ export function ComparePanel() {
         <StatCard icon={PencilLine} label="Cells modified" value={formatNumber(data.cells_modified)} hint="across all operations" />
         <StatCard
           icon={SquareDashed}
-          label="Missing cells"
+          label="Empty cells"
           value={formatNumber(c.missing_cells)}
-          hint={`was ${formatNumber(o.missing_cells)} (${formatDelta(c.missing_cells, o.missing_cells)})`}
+          hint={c.missing_cells === o.missing_cells ? `no change (was ${formatNumber(o.missing_cells)})` : `was ${formatNumber(o.missing_cells)} (${formatDelta(c.missing_cells, o.missing_cells)})`}
           tone={c.missing_cells < o.missing_cells ? "success" : "neutral"}
         />
       </section>

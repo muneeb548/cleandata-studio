@@ -258,7 +258,7 @@ export function UploadPanel() {
         <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
         <span>
           Your file is processed on the CleanData Studio server: it is held in a temporary file only while it is imported,
-          then kept in memory and deleted after {ttl} minutes of inactivity. It is not sent to AI services.{" "}
+          then kept in memory and deleted after {ttl} minutes of inactivity. The full file is never sent to an AI.{" "}
           <Link href="/privacy" className="text-primary hover:underline">
             Privacy details
           </Link>

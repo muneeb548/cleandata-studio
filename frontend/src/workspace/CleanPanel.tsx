@@ -149,7 +149,7 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
         <div className="space-y-4">
           <p className="text-body text-muted-foreground">
             Rows are duplicates when every value matches an earlier row exactly. The working data currently has{" "}
-            <strong className="text-foreground">{formatNumber(profile.stats.duplicate_rows)}</strong> duplicate row(s).
+            <strong className="text-foreground">{formatNumber(profile.stats.duplicate_rows)}</strong> duplicate {profile.stats.duplicate_rows === 1 ? "row" : "rows"}.
           </p>
           <fieldset className="space-y-2">
             <legend className="mb-2 text-small font-medium text-slate-700">Which copy should be kept?</legend>
@@ -270,8 +270,8 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
       return (
         <div className="space-y-4">
           <p className="text-body text-muted-foreground">
-            Currently <strong className="text-foreground">{formatNumber(profile.stats.empty_rows)}</strong> completely empty row(s) and{" "}
-            <strong className="text-foreground">{formatNumber(profile.stats.empty_columns)}</strong> completely empty column(s).
+            Currently <strong className="text-foreground">{formatNumber(profile.stats.empty_rows)}</strong> completely empty {profile.stats.empty_rows === 1 ? "row" : "rows"} and{" "}
+            <strong className="text-foreground">{formatNumber(profile.stats.empty_columns)}</strong> completely empty {profile.stats.empty_columns === 1 ? "column" : "columns"}.
           </p>
           <fieldset>
             <legend className="mb-2 text-small font-medium text-slate-700">Remove</legend>
@@ -871,7 +871,7 @@ function CleaningHistory() {
       {log.length > 0 && (
         <div className="border-t border-border px-5 py-2.5">
           <button type="button" className="text-caption font-medium text-primary hover:underline" aria-expanded={showLog} onClick={() => setShowLog((v) => !v)}>
-            {showLog ? "Hide activity log" : `Show activity log (${log.length} events${reverted ? `, ${reverted} undone/reset` : ""})`}
+            {showLog ? "Hide activity log" : `Show activity log (${pluralize(log.length, "event")}${reverted ? `, ${reverted} undone/reset` : ""})`}
           </button>
           {showLog && (
             <ol className="mt-2 space-y-1.5">

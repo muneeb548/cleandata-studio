@@ -936,7 +936,16 @@ def map_values(df: pd.DataFrame, op: MapValues) -> OpResult:
         used.update(k for k, h in zip(keys, hits) if h)
         out[c] = s.where(~hit, replacement).astype(STRING_DTYPE)
     changed, _ = count_changed_cells(df, out, columns=cols)
-    summary = f"Replaced {_plural(changed, 'value')} using {_plural(len(table), 'mapping')}." if changed \
+    examples: list[str] = []
+    for c in cols:
+        diff = (df[c].astype(STRING_DTYPE) != out[c].astype(STRING_DTYPE)).fillna(True) & ~(df[c].isna() & out[c].isna())
+        pairs = pd.DataFrame({"a": df[c][diff], "b": out[c][diff]}).drop_duplicates()
+        for a, b in pairs.itertuples(index=False):
+            if len(examples) < 3:
+                examples.append(f'"{a}" → {"empty" if pd.isna(b) else chr(34) + str(b) + chr(34)}')
+    where = f' in {", ".join(f"{chr(34)}{c}{chr(34)}" for c in cols[:3])}{" and more" if len(cols) > 3 else ""}'
+    summary = (f"Replaced {_plural(changed, 'value')}{where}: {', '.join(examples)}"
+               f"{' and more' if changed > len(examples) and len(examples) == 3 else ''}.") if changed \
         else "No values changed: every mapped value is already as it should be, or was not found."
     warnings = []
     unused = [m.value for m in op.mappings if (m.value.strip().lower() if op.ignore_case else m.value) not in used]

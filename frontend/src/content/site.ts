@@ -20,6 +20,16 @@ import {
   Type,
   Undo2,
   WandSparkles,
+  Banknote,
+  Flag,
+  Globe,
+  ListChecks,
+  Mail,
+  Phone,
+  Sparkles,
+  Split,
+  Users,
+  Zap,
 } from "lucide-react";
 
 export const SITE = {
@@ -60,9 +70,19 @@ export const FEATURES: Feature[] = [
     description: "Import CSV, TSV, Excel (.xlsx, .xls) and JSON files up to {limit}. Download results as CSV or Excel.",
   },
   {
+    icon: Zap,
+    title: "Quick Clean and reusable recipes",
+    description: "One click proposes every safe fix. Save the steps as a recipe and repeat them on next week's file, then send the client a ready-made change report.",
+  },
+  {
+    icon: Sparkles,
+    title: "Optional AI assistant",
+    description: "Describe the cleaning in your own words or ask questions about the data. The AI only chooses the app's own steps; every answer is calculated from your data and previewed first.",
+  },
+  {
     icon: ShieldCheck,
     title: "Private by design",
-    description: "No account required. Data is processed on the server, never sent to AI services, and deleted after inactivity.",
+    description: "No account required. Data is processed on the server and deleted after inactivity. The optional AI assistant never receives the full file.",
   },
 ];
 
@@ -78,6 +98,14 @@ export const OPERATIONS: OperationInfo[] = [
   { icon: ArrowDownUp, title: "Review outliers", description: "IQR-based detection for numeric columns. Review only, never auto-deleted." },
   { icon: WandSparkles, title: "Remove empty rows/columns", description: "Drop rows or columns that contain no values at all." },
   { icon: Replace, title: "Find and replace", description: "Replace exact values or text fragments in selected columns." },
+  { icon: ListChecks, title: "Map many values at once", description: "Turn “Isb”, “ISB” and “islamabad” into one spelling from a table." },
+  { icon: Phone, title: "Phone numbers, any country", description: "One national, international or E.164 format; invalid numbers reported." },
+  { icon: Globe, title: "Country names and codes", description: "“USA”, “U.S.A.” and “america” become “United States” or an ISO code." },
+  { icon: Mail, title: "Clean email addresses", description: "Remove spaces, capitals and “mailto:”, fix common typos, list invalid ones." },
+  { icon: Banknote, title: "Amounts in any currency", description: "“$1,250.00”, “Rs 1,25,000” and “1.234,56 €” become real numbers." },
+  { icon: Split, title: "Split and merge columns", description: "Full name into first and last name, or several columns into one." },
+  { icon: Users, title: "Near-duplicates", description: "Find the same record written differently, even with small spelling mistakes." },
+  { icon: Flag, title: "Flag rows for review", description: "Add a column that says why a row needs attention, without changing data." },
   { icon: History, title: "Activity log", description: "Every applied step is recorded with what it changed." },
 ];
 
@@ -107,7 +135,7 @@ export const FAQ = [
   },
   {
     q: "Where is my data processed?",
-    a: "Your file is uploaded to the CleanData Studio server. While it is being imported it is held in a private temporary file, which is deleted as soon as the import finishes; after that the data lives only in the server's memory. It is not shared with other users and not sent to any external AI service or third-party API. When you run the app on your own computer, the server is your computer.",
+    a: "Your file is uploaded to the CleanData Studio server. While it is being imported it is held in a private temporary file, which is deleted as soon as the import finishes; after that the data lives only in the server's memory. It is not shared with other users or sent to third-party APIs. The optional AI assistant receives only a short description of your columns (names, types, counts and a few example values), never the full file; by default it runs on the same computer as the app (Ollama), and if a site uses a cloud AI instead, the app asks for your permission before anything is sent. When you run the app on your own computer, the server is your computer.",
   },
   {
     q: "How long is my data kept?",

@@ -217,3 +217,10 @@ def test_health_of_clean_data(frame):
     profile = profiling.full_profile(frame("id,name\n1,Ali\n2,Sara\n"))
     assert profile["health"] == {**profile["health"], "looks_empty_cells": 0, "real_completeness": 100.0,
                                  "needs_cleaning": False}
+
+
+def test_more_placeholders_are_recognised(frame):
+    df = frame('signup,score\n2024-01-05,1\nnot available,#DIV/0!\n(blank),#VALUE!\n2024-02-01,4\n')
+    profile = profiling.full_profile(df)
+    cols = {c["name"]: c for c in profile["columns"]}
+    assert cols["signup"]["looks_empty"] == 2 and cols["score"]["looks_empty"] == 2

@@ -37,7 +37,8 @@ const BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "").r
 /** Default request timeout. Large datasets can take a while to profile, so it is generous. */
 const TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS) || 120_000;
 const SESSION_KEY = "cleandata.session";
-const AI_TIMEOUT_MS = 240_000;
+// Longer than the backend's AI_TIMEOUT_SECONDS (300), so the server's clear message arrives first.
+const AI_TIMEOUT_MS = 330_000;
 
 /** Error with a user-facing message and an optional suggestion, as sent by the API. */
 export class ApiError extends Error {

@@ -22,7 +22,7 @@ function SectionHeading({ eyebrow, title, intro, id }: { eyebrow: string; title:
 
 const PRIVACY_POINTS = [
   { icon: ServerCog, title: "Processed on the server", text: "Your data is cleaned in the server's memory. Temporary files used during import and download are deleted right away." },
-  { icon: Lock, title: "No AI services or third-party APIs", text: "Your data is never sent to external AI services or other APIs." },
+  { icon: Lock, title: "Your full file never goes to an AI", text: "The optional AI assistant sees only column names, counts and a few examples. It runs on the same computer by default; a cloud AI is used only after you agree." },
   { icon: Timer, title: "Deleted after inactivity", text: "Sessions are removed after {ttl} without activity, or when you replace the file." },
   { icon: UserX, title: "No account required", text: "No registration. Each session is isolated behind a random private ID." },
 ];
@@ -63,7 +63,7 @@ export function LandingPage() {
               </Link>
             </div>
             <ul className="mt-8 grid gap-2.5 text-small text-slate-600 sm:grid-cols-2">
-              {["Preview every change before applying", "Undo or reset at any time", "Original values preserved", "Not sent to AI services"].map((point) => (
+              {["Preview every change before applying", "Undo or reset at any time", "Original values preserved", "Full file never sent to AI"].map((point) => (
                 <li key={point} className="flex items-center gap-2">
                   <span className="flex size-4 items-center justify-center rounded-full bg-success-soft text-success">
                     <Check className="size-3" aria-hidden="true" />
@@ -86,7 +86,7 @@ export function LandingPage() {
             title="Everything you need to trust a dataset"
             intro="A focused toolkit for the most common data quality problems, with clear feedback at every step."
           />
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {FEATURES.map((f) => (
               <article key={f.title} className="rounded-lg border border-border bg-background p-5 shadow-card">
                 <span className="inline-flex size-9 items-center justify-center rounded-md bg-primary-soft text-primary">

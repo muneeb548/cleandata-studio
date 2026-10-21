@@ -70,23 +70,39 @@ def _category_columns(df: pd.DataFrame, exclude: set[str]) -> list[str]:
     return cols
 
 
-def _spelling_mappings(s: pd.Series) -> list[dict]:
-    """For every word written in more than one way, map it to its most common spelling.
-    On a tie, prefer the spelling that starts with a capital ("Lahore" over "lahore" and "LAHORE")."""
-    text = s.dropna().astype(STRING_DTYPE).str.strip()
-    text = text[text != ""]
-    counts = text.value_counts().to_dict()
-    first_seen: dict[str, int] = {}
-    for i, spelling in enumerate(text.tolist()):
-        first_seen.setdefault(spelling, i)
+def well_cased(spelling: str) -> bool:
+    """Starts with a capital and is not written in capitals (short acronyms such as "USA" are fine)."""
+    letters = [ch for ch in spelling if ch.isalpha()]
+    return spelling[:1].isupper() and (not spelling.isupper() or len(letters) <= 4)
+
+
+def best_spellings(counts: dict[str, int]) -> dict[str, str]:
+    """For each word written in more than one way, the spelling to use, keyed by its lowercase form.
+
+    A properly capitalised spelling wins over all-lowercase or ALL-CAPS ones ("Lahore" over
+    "lahore" and "LAHORE"), even when it is less common: counts are easily skewed by duplicate
+    rows. Short acronyms such as "USA" count as properly capitalised. Among equals the most
+    common spelling wins, then the first one given.
+    """
+    order = {spelling: i for i, spelling in enumerate(counts)}
     groups: dict[str, list[str]] = {}
     for spelling in counts:
-        groups.setdefault(spelling.lower(), []).append(spelling)
+        groups.setdefault(spelling.strip().lower(), []).append(spelling)
 
     def rank(spelling: str) -> tuple:
-        return (-counts[spelling], spelling != spelling.title(), not spelling[:1].isupper(), first_seen[spelling])
+        return (not well_cased(spelling), -counts[spelling], spelling != spelling.title(), order[spelling])
 
-    return [{"value": key, "to": min(spellings, key=rank)} for key, spellings in groups.items() if len(spellings) > 1]
+    return {key: min(spellings, key=rank) for key, spellings in groups.items() if len(spellings) > 1}
+
+
+def _spelling_mappings(s: pd.Series) -> list[dict]:
+    """Map every word written in more than one way to one spelling (see best_spellings)."""
+    text = s.dropna().astype(STRING_DTYPE).str.strip()
+    text = text[text != ""]
+    counts: dict[str, int] = {}
+    for spelling in text.tolist():  # first-seen order, then counts
+        counts[spelling] = counts.get(spelling, 0) + 1
+    return [{"value": key, "to": to} for key, to in best_spellings(counts).items()]
 
 
 def _placeholder_step(df: pd.DataFrame) -> dict | None:
@@ -132,6 +148,9 @@ def _candidates(df: pd.DataFrame) -> tuple[list[tuple[dict, str, bool, str | Non
     """(operation, title, selected, note) in the order they should run, plus decisions left to a human."""
     out: list[tuple[dict, str, bool, str | None]] = []
     decisions: list[str] = []
+    if len(df) and df.isna().all(axis=1).any():
+        # A row without a single value carries no data; it also shows up as a duplicate and as missing values.
+        out.append(({"type": "remove_empty", "target": "rows"}, "Remove completely empty rows", True, None))
     if df.duplicated().any():
         has_id = _has_id_column(df)
         out.append(({"type": "remove_duplicates", "keep": "first"}, "Remove exact duplicate rows", has_id,
@@ -165,6 +184,15 @@ def _candidates(df: pd.DataFrame) -> tuple[list[tuple[dict, str, bool, str | Non
     date_ops, date_decisions = _date_candidates(df)
     out.extend((op, f'Write the dates in "{op["columns"][0]}" in one format', True, None) for op in date_ops)
     decisions.extend(date_decisions)
+    for issue in profiling.detect_issues(df):
+        if str(issue["id"]).startswith("amounts:"):
+            col = issue["column"]
+            out.append(({"type": "clean_numbers", "columns": [col], "decimal": "auto", "on_error": "abort"},
+                        f'Turn the amounts in "{col}" into numbers', True, None))
+    if any(str(c) != str(c).strip() for c in df.columns):
+        # Last, because every step before it refers to the columns by their current names.
+        out.append(({"type": "clean_column_names", "replace_spaces": False, "lowercase": False},
+                    "Remove spaces around column names", True, None))
     return out, decisions
 
 
@@ -191,9 +219,14 @@ def plan(df: pd.DataFrame) -> dict:
         if result.blocked:
             if op.type == "convert_type":
                 decisions.append(f'Some dates in "{op.columns[0]}" could not be read. Check them in Data types.')
+            elif op.type == "clean_numbers":
+                decisions.append(f'Some values in "{op.columns[0]}" are not amounts. Check them in Data types → Clean numbers.')
             continue
         if not result.changed:
             continue
+        if op.type == "clean_numbers" and result.warnings:
+            # Mixed currencies or "1,250" that could mean 1.25: a person must decide, so it starts unticked.
+            selected, note = False, result.warnings[0]
         steps.append({"id": f"step-{i + 1}", "title": title, "summary": result.summary, "label": LABELS[op.type],
                       "operation": op.model_dump(), "selected": selected, "note": note,
                       "warnings": result.warnings})

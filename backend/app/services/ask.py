@@ -78,6 +78,10 @@ The plan:
 Use column names exactly as written in the data description. If the question cannot be answered with
 such a plan (for example it asks for predictions, opinions, or data that is not in the table),
 set possible to false and explain why in reply.
+
+Example. Question: "which city has the most customers?" (the table has a "city" column). Answer:
+{"possible": true, "reply": "", "description": "Customers per city", "filters": [], "group_by": ["city"],
+ "metric": "count_rows", "metric_column": "", "sort": "desc", "limit": 10}
 """
 
 

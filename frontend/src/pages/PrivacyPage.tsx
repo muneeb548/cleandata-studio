@@ -31,7 +31,12 @@ export function PrivacyPage() {
           <li>Your CSV file is sent from your browser to the CleanData Studio server over the connection you use to open the site.</li>
           <li>While a file is imported, it is held in a private temporary file on the server, which is deleted as soon as the import finishes (or fails). The data is then kept only in the server's memory and is never stored in a database.</li>
           <li>When you download, the cleaned file is written to a temporary file, sent to you, and deleted immediately.</li>
-          <li>Your data is not sent to external AI services or third-party APIs.</li>
+          <li>Your data is not sent to third-party APIs.</li>
+          <li>
+            The optional AI assistant (Ask AI, Ask a question, AI suggestions and summaries) receives only a short description of the data:
+            column names, types, counts and a few example values, never the full file. By default it runs on the same computer as the app.
+            If the site uses a cloud AI instead, the app says so and asks for your permission before anything is sent.
+          </li>
           <li>Every upload gets a random, private session ID. Other users cannot access your session.</li>
         </ul>
         <p>

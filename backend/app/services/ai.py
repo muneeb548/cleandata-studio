@@ -15,6 +15,7 @@ Safety design (the important part):
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import pandas as pd
@@ -32,6 +33,7 @@ MAX_STEPS = 10
 SAMPLE_ROWS = 2000           # proposed steps are tried on this many rows before they are shown
 MAX_PROMPT_COLUMNS = 150     # very wide files: describe the first 150 columns only
 MAX_MAP_VALUES = 300         # value mapping: most frequent values sent to the model
+LOCAL_EXAMPLES = 5           # local models read slowly on a CPU: fewer example values per column
 
 
 # --------------------------------------------------------------------------- status and limits
@@ -64,10 +66,15 @@ def status() -> dict:
     }
 
 
+def _example_count() -> int:
+    """Example values sent per column: fewer for a local model, which reads slowly on a CPU."""
+    return min(LOCAL_EXAMPLES, settings.ai_max_values) if ai_client.provider_info().local else settings.ai_max_values
+
+
 def _shared_text(values: bool) -> str:
     base = "Column names, column types and counts (rows, missing cells, different values)"
     if values:
-        base += f", plus up to {settings.ai_max_values} example values per column"
+        base += f", plus up to {_example_count()} example values per column"
     return base + ". The full file is never sent."
 
 
@@ -103,8 +110,14 @@ def _type_text(schema: dict, defs: dict) -> str:
     return schema.get("type", "any")
 
 
-def operation_guide() -> str:
-    """One line per operation with its fields, generated from the real Pydantic models."""
+def operation_guide(compact: bool = False) -> str:
+    """One line per operation with its fields, generated from the real Pydantic models.
+
+    compact=True leaves out the field descriptions: about a third of the length, which matters
+    for a local model on a laptop CPU, where reading the prompt is the slowest part.
+    """
+    if compact:
+        return "\n".join(_compact_line(name, model) for name, model in OPERATION_MODELS.items())
     lines = []
     for name, model in OPERATION_MODELS.items():
         schema = model.model_json_schema()
@@ -127,12 +140,41 @@ def operation_guide() -> str:
     return "\n".join(lines)
 
 
+def _compact_type(spec: dict, defs: dict) -> str:
+    if "$ref" in spec:
+        sub = defs[spec["$ref"].split("/")[-1]]
+        return "{" + ",".join(f"{k}:{_compact_type(v, defs)}" for k, v in sub["properties"].items()) + "}"
+    if "anyOf" in spec:
+        return "|".join(_compact_type(s, defs) for s in spec["anyOf"] if s.get("type") != "null")
+    if "enum" in spec:
+        return "|".join(str(v) for v in spec["enum"])
+    if spec.get("type") == "array":
+        return f"[{_compact_type(spec.get('items', {}), defs)}]"
+    return {"string": "text", "boolean": "bool", "integer": "int"}.get(spec.get("type", ""), spec.get("type", "any"))
+
+
+def _compact_line(name: str, model) -> str:
+    schema = model.model_json_schema()
+    defs = schema.get("$defs", {})
+    required = set(schema.get("required", []))
+    fields = []
+    for field, spec in schema["properties"].items():
+        if field == "type":
+            continue
+        text = f"{field}{'' if field in required else '?'}:{_compact_type(spec, defs)}"
+        if "default" in spec and spec["default"] not in (None, [], ""):
+            text += f"={spec['default']}"
+        fields.append(text)
+    doc = (model.__doc__ or "").strip().splitlines()[0].rstrip(".")
+    return f"- {name} ({doc}): " + (", ".join(fields) if fields else "no settings")
+
+
 def _examples(series: pd.Series, limit: int) -> list[str]:
     counts = series.dropna().astype(str).str.slice(0, 60).value_counts()
     return [str(v) for v in counts.head(limit).index]
 
 
-def describe_data(session: Session, values: bool) -> str:
+def describe_data(session: Session, values: bool, examples: int | None = None) -> str:
     """A compact text description of the working data for the model."""
     with session.lock:
         df = session.current
@@ -143,11 +185,11 @@ def describe_data(session: Session, values: bool) -> str:
     for col in profile["columns"][:MAX_PROMPT_COLUMNS]:
         text = f'- "{col["name"]}": {col["type"]}, {col["missing"]} missing, {col["unique"]} different values'
         if values:
-            examples = _examples(df[col["name"]], settings.ai_max_values)
-            if examples:
-                text += f"; examples: {json.dumps(examples, ensure_ascii=False)}"
+            shown = _examples(df[col["name"]], examples or settings.ai_max_values)
+            if shown:
+                text += f"; examples: {json.dumps(shown, ensure_ascii=False)}"
         lines.append(text)
-    issues = [i["title"] for i in profile.get("issues", [])][:30]
+    issues = [i["title"] for i in profile.get("issues", [])][: 12 if ai_client.provider_info().local else 30]
     if issues and values:  # issue titles can quote values from the file
         lines.append("Problems the app found:\n" + "\n".join(f"- {t}" for t in issues))
     return "\n".join(lines)
@@ -186,9 +228,17 @@ Rules:
 {guide}
 - "settings" must be a JSON object as a string, e.g. "{{\\"columns\\": [\\"email\\"]}}". Do not include "type".
 - Use column names exactly as written in the data description. Never invent columns.
-- Only do what the user asked. If something cannot be done with these operations, say so in "reply" and leave it out.
+- Only do what the user asked: one step for each thing they asked for, nothing extra. Do not add steps
+  for problems they did not mention. If something cannot be done with these operations, say so in "reply".
+- Use only setting names listed for that operation; leave out settings you do not need (defaults are used).
 - Prefer safe choices: keep values that cannot be fixed (on_invalid/on_error "keep" or "set_missing", never delete data the user did not ask to delete).
-- At most {max_steps} steps. Write "reply" in the same language the user wrote in.
+- At most {max_steps} steps. "reply" is one short, friendly sentence for the user in the language they wrote in;
+  never put operation names or settings in "reply".
+
+Example. Request: "remove duplicates and make city names title case" (the table has a "city" column). Answer:
+{{"reply": "I will remove duplicate rows and write city names in Title Case.", "steps": [
+ {{"operation": "remove_duplicates", "settings": "{{}}", "reason": "You asked to remove duplicates."}},
+ {{"operation": "standardize_text", "settings": "{{\\"columns\\": [\\"city\\"], \\"case\\": \\"title\\"}}", "reason": "You asked for Title Case city names."}}]}}
 """
 
 
@@ -254,17 +304,31 @@ def validate_steps(df: pd.DataFrame, raw_steps: list[dict]) -> tuple[list[dict],
     return accepted, rejected
 
 
+_CODE_LIKE = re.compile(r"\?:|\w+\(|[{}\[\]]|_\w+=")
+
+
+def _clean_reply(reply: object, steps: int) -> str:
+    """The model's sentence for the user, or a plain one when a small model returned code-like text."""
+    text = str(reply or "").strip()
+    if not text or len(text) > 400 or len(_CODE_LIKE.findall(text)) >= 2:
+        if not steps:
+            return "I could not turn this into cleaning steps. Try naming the column and what should happen to it."
+        return f"Here is a plan with {steps} step{'s' if steps != 1 else ''}. Untick anything you don't want, then preview."
+    return text
+
+
 def plan(session: Session, request: str, consent: bool = False) -> dict:
     client = _start(session, consent)
     values = settings.ai_send_values
-    system = PLAN_SYSTEM.format(guide=operation_guide(), max_steps=MAX_STEPS)
-    prompt = f"Data description:\n{describe_data(session, values)}\n\nUser request:\n{request}"
+    local = ai_client.provider_info().local
+    system = PLAN_SYSTEM.format(guide=operation_guide(compact=local), max_steps=MAX_STEPS)
+    prompt = f"Data description:\n{describe_data(session, values, _example_count())}\n\nUser request:\n{request}"
     answer = client.complete_json(system, prompt, PLAN_SCHEMA, max_tokens=2000)
     steps = answer.get("steps") if isinstance(answer.get("steps"), list) else []
     with session.lock:
         accepted, rejected = validate_steps(session.current, [s for s in steps if isinstance(s, dict)])
     return {
-        "reply": str(answer.get("reply", ""))[:1000],
+        "reply": _clean_reply(answer.get("reply"), len(accepted)),
         "steps": accepted,
         "rejected": rejected,
         "shared": _shared_text(values),
@@ -295,9 +359,12 @@ MAP_SYSTEM = """You standardise the values of one column of a table.
 You get the column name and its different values with how often each appears.
 Group values that mean the same thing: spelling mistakes, abbreviations, different letter case,
 extra spaces or punctuation, local and English names (e.g. "Lhr", "lahore", "LAHORE" -> "Lahore").
-For each group choose one correct, complete, properly capitalised form, usually the most common correct spelling.
+For each group choose one correct, complete, properly capitalised form ("Islamabad", not "ISLAMABAD" or "islamabad").
 Return only the values that should change, as {"value": original value exactly as given, "to": new value}.
 Never merge values that are different things (e.g. two different cities or products). When unsure, leave the value out.
+
+Example. Values: "Islamabad": 5, "ISB": 2, "isb": 1, "Karachi": 4, "khi": 1. Answer:
+{"mappings": [{"value": "ISB", "to": "Islamabad"}, {"value": "isb", "to": "Islamabad"}, {"value": "khi", "to": "Karachi"}]}
 """
 
 
@@ -310,14 +377,43 @@ def suggest_mappings(session: Session, column: str, consent: bool = False) -> di
     listing = "\n".join(f"{json.dumps(v['value'], ensure_ascii=False)}: {v['count']}" for v in values["values"])
     prompt = f'Column: "{column}"\nValues (value: count):\n{listing}'
     answer = client.complete_json(MAP_SYSTEM, prompt, MAP_SCHEMA, max_tokens=3000)
-    known = {v["value"] for v in values["values"]}
+    from app.services.quick_clean import best_spellings, well_cased
+
+    counts = {v["value"]: v["count"] for v in values["values"]}
+    # Differences in capitals and spaces only are decided by fixed rules, not by the model:
+    # small models sometimes pick "ISLAMABAD" over "Islamabad" or miss some variants.
+    best = best_spellings(counts)
+    # When the file has no properly capitalised spelling of a word ("lahore", "LAHORE"),
+    # a properly capitalised one from the model ("Lahore") is used instead.
+    for m in answer.get("mappings") or []:
+        to = str(m.get("to", "")).strip() if isinstance(m, dict) else ""
+        key = to.lower()
+        if to and well_cased(to) and not well_cased(best.get(key, next((v for v in counts if v.strip().lower() == key), ""))):
+            best[key] = to
+
+    for key, spelling in list(best.items()):
+        # Still only "lahore"/"LAHORE": suggest Title Case for plain words. It is only a suggestion
+        # in the mapping table, which the user reviews before anything is applied.
+        if not well_cased(spelling) and re.fullmatch(r"[^\W\d_]+(?:[ '\-][^\W\d_]+)*", spelling.strip()):
+            best[key] = spelling.strip().title()
+
+    def proper(text: str) -> str:
+        return best.get(text.strip().lower(), text)
+
     mappings, seen = [], set()
     for m in answer.get("mappings") or []:
         if not isinstance(m, dict):
             continue
-        value, to = str(m.get("value", "")), str(m.get("to", "")).strip()
+        value, to = str(m.get("value", "")), proper(str(m.get("to", "")).strip())
         # Keep only real values of this column that actually change; ignore anything invented.
-        if value in known and to and to != value and value not in seen and len(to) <= 1000:
+        if value in counts and to and to != value and value not in seen and len(to) <= 1000:
+            if to.strip().lower() == value.strip().lower() and proper(value) == value:
+                continue  # the model "corrected" a spelling that is already the right one
+            seen.add(value)
+            mappings.append({"value": value, "to": to})
+    for value in counts:  # case and space variants the model did not mention
+        to = proper(value)
+        if to != value and value not in seen:
             seen.add(value)
             mappings.append({"value": value, "to": to})
     return {
@@ -381,7 +477,7 @@ def ask(session: Session, question: str, consent: bool = False) -> dict:
 
     client = _start(session, consent)
     values = settings.ai_send_values
-    prompt = f"Data description:\n{describe_data(session, values)}\n\nQuestion:\n{question}"
+    prompt = f"Data description:\n{describe_data(session, values, _example_count())}\n\nQuestion:\n{question}"
     raw = client.complete_json(query.SYSTEM, prompt, query.PLAN_SCHEMA, max_tokens=800)
     base = {"question": question, "shared": _shared_text(values), "provider": ai_client.provider_info().label}
     if not raw.get("possible", True):

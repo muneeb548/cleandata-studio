@@ -107,7 +107,7 @@ class Settings:
     # false = only column names, types and counts ever leave the data.
     ai_send_values: bool = field(default_factory=lambda: _bool("AI_SEND_VALUES", True))
     ai_max_values: int = field(default_factory=lambda: _int("AI_MAX_VALUES", 20))
-    ai_timeout_seconds: int = field(default_factory=lambda: _int("AI_TIMEOUT_SECONDS", 180))
+    ai_timeout_seconds: int = field(default_factory=lambda: _int("AI_TIMEOUT_SECONDS", 300))
     # AI requests allowed per uploaded file (protects a paid API key). 0 = unlimited.
     ai_max_calls_per_session: int = field(default_factory=lambda: _int("AI_MAX_CALLS_PER_SESSION", 30))
 

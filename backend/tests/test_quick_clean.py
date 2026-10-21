@@ -141,3 +141,47 @@ def test_excel_export_can_include_the_report_sheet(session):
         wb.close()
     finally:
         os.remove(plain)
+
+
+def test_capitalised_spelling_wins_even_when_less_common():
+    from app.services.quick_clean import _spelling_mappings
+
+    s = pd.Series(["lahore", "lahore", "Lahore", "LAHORE", "USA", "usa", "usa", "paid", "paid", "Paid"], dtype="string")
+    mapping = {m["value"]: m["to"] for m in _spelling_mappings(s)}
+    assert mapping["lahore"] == "Lahore"
+    assert mapping["usa"] == "USA"  # short acronym in capitals is a proper spelling
+    assert mapping["paid"] == "Paid"
+
+
+def test_quick_clean_removes_completely_empty_rows(frame):
+    from app.services import quick_clean
+
+    df = frame("id,name,email\n1,Ali,a@x.com\n,,\n2,Sara,s@x.com\n")
+    plan = quick_clean.plan(df)
+    first = plan["steps"][0]
+    assert first["operation"]["type"] == "remove_empty" and first["selected"]
+    assert not any("missing" in d for d in plan["needs_decision"])  # the empty row no longer counts as missing data
+
+
+def test_quick_clean_converts_amounts_and_trims_header_spaces(frame):
+    from app.services import quick_clean, workspace  # noqa: F401
+    from app.services.operations import run_operation
+
+    df = frame("Name ,Salary\nAli,50000\nSara,62000\nJohn,\"$1,250.50\"\nMia,700\n")
+    plan = quick_clean.plan(df)
+    titles = [s["title"] for s in plan["steps"]]
+    assert 'Turn the amounts in "Salary" into numbers' in titles
+    assert titles[-1] == "Remove spaces around column names"
+    work = df
+    for s in plan["steps"]:
+        work = run_operation(work, OP.validate_python(s["operation"])).df
+    assert list(work.columns) == ["Name", "Salary"]
+    assert work["Salary"].tolist() == [50000.0, 62000.0, 1250.5, 700.0]
+
+
+def test_mixed_currencies_are_not_ticked(frame):
+    from app.services import quick_clean
+
+    df = frame('price\n"$1,250"\n"€300"\n"$20"\n"Rs 500"\n')
+    steps = [s for s in quick_clean.plan(df)["steps"] if s["operation"]["type"] == "clean_numbers"]
+    assert steps and steps[0]["selected"] is False and "mixes currencies" in steps[0]["note"]

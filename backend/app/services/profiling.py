@@ -14,7 +14,12 @@ import pandas as pd
 from app.services.csv_loader import STRING_DTYPE
 
 LOGICAL_TYPES = ("integer", "decimal", "text", "datetime", "boolean", "empty")
-PLACEHOLDER_TOKENS = {"na", "n/a", "null", "none", "nan", "-", "--", "?", "missing", "#n/a"}
+PLACEHOLDER_TOKENS = {
+    "na", "n/a", "n.a.", "n.a", "null", "none", "nil", "nan", "-", "--", "?", "missing",
+    "not available", "not applicable", "(blank)", "(empty)",
+    # Excel error values exported as text: there is no real value behind them.
+    "#n/a", "#value!", "#ref!", "#div/0!", "#num!", "#name?", "#null!",
+}
 
 
 # --------------------------------------------------------------------------- types

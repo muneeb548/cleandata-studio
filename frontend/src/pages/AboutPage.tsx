@@ -38,8 +38,8 @@ export function AboutPage() {
         <h2>How it is built</h2>
         <p>
           The interface is built with React and TypeScript. All data processing happens in a Python backend using
-          FastAPI and pandas. It reads CSV, TSV, Excel and JSON files and exports CSV or Excel; saved projects and AI suggestions are possible
-          future improvements.
+          FastAPI and pandas. It reads CSV, TSV, Excel and JSON files and exports CSV or Excel. An optional AI assistant turns plain-language
+          requests and questions into the app's own validated steps; the AI never runs code and never receives the full file.
         </p>
       </section>
       <Link href="/app" className={buttonVariants()}>

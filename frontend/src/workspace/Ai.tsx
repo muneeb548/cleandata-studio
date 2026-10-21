@@ -395,6 +395,9 @@ export function AiSummaryCard() {
           </Button>
         </div>
         {!info?.history.length && <FieldHint>Apply at least one cleaning step first.</FieldHint>}
+        {status.local && language !== "English" && (
+          <FieldHint>The local AI writes best in English; other languages can contain mistakes, so read the summary carefully before sending it.</FieldHint>
+        )}
         <AiPrivacyNote status={status} shared="the change report (row and column counts and the list of applied steps)." consent={consent} onConsent={setConsent} id="ai-sum-consent" />
         {error && (
           <Alert tone="danger" title={error.message}>

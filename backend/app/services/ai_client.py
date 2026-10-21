@@ -95,7 +95,10 @@ class OllamaClient:
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             "stream": False,
             "format": schema,  # Ollama constrains the answer to this JSON schema
-            "options": {"temperature": 0, "num_ctx": 8192, "num_predict": max_tokens},
+            "options": {"temperature": 0, "num_ctx": 4096, "num_predict": max_tokens},
+            # Keep the model in memory between requests: loading it again takes 10-30 s on a laptop.
+            # The unchanged system prompt is also cached, so the next request reads only the new part.
+            "keep_alive": "30m",
         }
         try:
             data = _post_json(f"{self.url}/api/chat", body, {}, self.timeout)
