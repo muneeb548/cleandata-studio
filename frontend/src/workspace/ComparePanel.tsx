@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, CheckCircle2, Columns3, GitCompareArrows, PencilLine, Rows3, SearchX, SquareDashed } from "lucide-react";
 import { api } from "@/api/client";
-import type { CompareRowsPage, Stats } from "@/api/types";
+import type { CompareRowsPage, Quality, Stats } from "@/api/types";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,15 +17,27 @@ import { Cell } from "./shared";
 import { useAsync } from "./useAsync";
 import { useWorkspace } from "./WorkspaceContext";
 
-const METRICS: { key: keyof Stats; label: string; better: "lower" | "higher" | "neutral"; pct?: boolean }[] = [
+type Metrics = Stats & { problems?: number };
+
+const METRICS: { key: keyof Metrics; label: string; better: "lower" | "higher" | "neutral"; pct?: boolean }[] = [
   { key: "rows", label: "Rows", better: "neutral" },
   { key: "columns", label: "Columns", better: "neutral" },
-  { key: "missing_cells", label: "Empty cells", better: "lower" },
+  { key: "missing_cells", label: "Missing cells", better: "lower" },
   { key: "duplicate_rows", label: "Duplicate rows", better: "lower" },
   { key: "columns_with_missing", label: "Columns with missing values", better: "lower" },
   { key: "empty_rows", label: "Completely empty rows", better: "lower" },
   { key: "completeness", label: "Completeness", better: "higher", pct: true },
+  { key: "problems", label: "Problems found", better: "lower" },
 ];
+
+/**
+ * Plain stats count only truly empty cells, so turning "N/A" into an empty cell would look
+ * like the data got worse. The server's quality numbers count "N/A"-style cells as missing
+ * on both sides, the same way the Overview does.
+ */
+export function withQuality(stats: Stats, quality?: Quality): Metrics {
+  return quality ? { ...stats, ...quality } : stats;
+}
 
 const PAGE_SIZE = 50;
 
@@ -235,8 +247,8 @@ export function ComparePanel() {
     );
   }
 
-  const o = data.original;
-  const c = data.current;
+  const o = withQuality(data.original, data.quality?.original);
+  const c = withQuality(data.current, data.quality?.current);
   return (
     <div className="space-y-6">
       {header}
@@ -247,7 +259,7 @@ export function ComparePanel() {
         <StatCard icon={PencilLine} label="Cells modified" value={formatNumber(data.cells_modified)} hint="across all operations" />
         <StatCard
           icon={SquareDashed}
-          label="Empty cells"
+          label="Missing cells"
           value={formatNumber(c.missing_cells)}
           hint={c.missing_cells === o.missing_cells ? `no change (was ${formatNumber(o.missing_cells)})` : `was ${formatNumber(o.missing_cells)} (${formatDelta(c.missing_cells, o.missing_cells)})`}
           tone={c.missing_cells < o.missing_cells ? "success" : "neutral"}
@@ -258,7 +270,9 @@ export function ComparePanel() {
         <Card className="xl:col-span-3">
           <CardHeader>
             <CardTitle>Quality metrics</CardTitle>
-            <CardDescription>Original upload versus current working data.</CardDescription>
+            <CardDescription>
+              Original upload versus current working data. "N/A", "null" and space-only cells count as missing on both sides, as in the Overview.
+            </CardDescription>
           </CardHeader>
           <TableContainer label="Quality metrics">
             <Table className="min-w-[420px]">
@@ -271,7 +285,7 @@ export function ComparePanel() {
                 </tr>
               </THead>
               <tbody>
-                {METRICS.map((m) => {
+                {METRICS.filter((m) => o[m.key] !== undefined && c[m.key] !== undefined).map((m) => {
                   const before = o[m.key] as number | null;
                   const after = c[m.key] as number | null;
                   const fmt = (v: number | null) => (m.pct ? formatPercent(v) : formatNumber(v));

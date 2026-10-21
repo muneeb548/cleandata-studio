@@ -98,6 +98,22 @@ def test_compare_counts(fresh_store):
     assert len(c["operations"]) == 2
 
 
+def test_compare_counts_placeholders_as_missing_before_and_after(fresh_store):
+    """Turning "N/A" into a real empty cell must not look like the data got worse."""
+    from app.schemas.operations import MapValues
+
+    text = "name,status\nAli,active\nSara,N/A\nZoe,N/A\nBob,active\n"
+    s, _ = upload(fresh_store, text, "q.csv")
+    preview_apply(s, MapValues(type="map_values", columns=["status"], mappings=[{"value": "N/A", "to": ""}]))
+    c = ws.compare(s)
+    assert c["original"]["missing_cells"] == 0 and c["current"]["missing_cells"] == 2  # plain counts
+    q = c["quality"]
+    assert q["original"]["missing_cells"] == 2 and q["current"]["missing_cells"] == 2
+    assert q["original"]["completeness"] == q["current"]["completeness"] == 75.0
+    assert q["original"]["columns_with_missing"] == q["current"]["columns_with_missing"] == 1
+    assert q["current"]["problems"] <= q["original"]["problems"]
+
+
 def test_csv_export_round_trip(fresh_store):
     text = 'id,comment,city\n1,"Hello, ""world""",لاہور\n2,"two\nlines",\n'
     s, _ = upload(fresh_store, text, "notes.csv")

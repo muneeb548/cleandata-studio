@@ -344,9 +344,18 @@ export interface ApplyResult extends OperationPreview {
   session: SessionInfo;
 }
 
+/** Before/after numbers that match the Overview: "N/A"-style and space-only cells count as missing. */
+export interface Quality {
+  missing_cells: number;
+  columns_with_missing: number;
+  completeness: number | null;
+  problems: number;
+}
+
 export interface CompareResult {
   original: Stats;
   current: Stats;
+  quality?: { original: Quality; current: Quality };
   rows_removed: number;
   columns_removed: number;
   cells_modified: number;

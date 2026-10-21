@@ -378,9 +378,22 @@ class ComparePreview(_Model):
     current: PreviewTable
 
 
+class Quality(_Model):
+    missing_cells: int = Field(description='Empty cells plus "N/A"-style and space-only cells.')
+    columns_with_missing: int
+    completeness: float | None = Field(description="Completeness when those cells also count as missing.")
+    problems: int = Field(description="Problems found (notes to review not included).")
+
+
+class CompareQuality(_Model):
+    original: Quality
+    current: Quality
+
+
 class CompareResponse(_Model):
     original: Stats
     current: Stats
+    quality: CompareQuality = Field(description="Numbers that match the Overview, for a fair before/after comparison.")
     rows_removed: int
     columns_removed: int
     cells_modified: int

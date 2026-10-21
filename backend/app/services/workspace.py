@@ -478,6 +478,23 @@ def operations_catalog() -> list[dict]:
 
 # --------------------------------------------------------------------------- comparison
 
+def quality(session: Session, which: str) -> dict:
+    """The same numbers the Overview shows: "N/A"-style and space-only cells count as missing.
+
+    Plain `stats` counts only truly empty cells, so turning "N/A" into a real empty cell
+    would look like the data got worse. These numbers make before and after comparable.
+    """
+    profile = get_profile(session, which)
+    s, health = profile["stats"], profile["health"]
+    gaps = sum(1 for c in profile["columns"] if c["missing"] or c.get("looks_empty"))
+    return {
+        "missing_cells": s["missing_cells"] + health["looks_empty_cells"],
+        "columns_with_missing": gaps,
+        "completeness": health["real_completeness"],
+        "problems": health["issues"],
+    }
+
+
 def compare(session: Session, sample_rows: int = 20) -> dict:
     original, current = session.original, session.current
     o, c = stats(session, "original"), stats(session, "current")
@@ -485,6 +502,7 @@ def compare(session: Session, sample_rows: int = 20) -> dict:
     return {
         "original": o,
         "current": c,
+        "quality": {"original": quality(session, "original"), "current": quality(session, "current")},
         "rows_removed": max(0, o["rows"] - c["rows"]),
         "columns_removed": max(0, o["columns"] - c["columns"]),
         "cells_modified": cells_modified,
