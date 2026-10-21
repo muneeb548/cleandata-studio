@@ -272,12 +272,18 @@ class FlagRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     column: ColumnName
-    check: Literal["missing", "invalid_email", "invalid_phone", "not_number", "not_date", "duplicate_value"]
+    check: Literal["missing", "invalid_email", "invalid_phone", "not_number", "not_date", "duplicate_value", "out_of_range"]
     region: RegionCode | None = Field(
         None, description="invalid_phone only: country for numbers written without a + country code."
     )
     region_column: ColumnName | None = Field(
         None, description="invalid_phone only: column that says which country each row is from."
+    )
+    min: Annotated[str, StringConstraints(max_length=50)] | None = Field(
+        None, description="out_of_range only: smallest allowed value, a number (0) or a date (2024-01-01)."
+    )
+    max: Annotated[str, StringConstraints(max_length=50)] | None = Field(
+        None, description="out_of_range only: largest allowed value, a number (120) or a date."
     )
 
     @field_validator("region")
@@ -299,6 +305,45 @@ class FlagRows(_Op):
         return _clean_new_name(value)
 
 
+class ColumnRename(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    column: ColumnName
+    to: NewColumnName
+
+    @field_validator("to")
+    @classmethod
+    def _check_to(cls, value: str) -> str:
+        return _clean_new_name(value)
+
+
+class OrganizeColumns(_Op):
+    """Rename, remove and reorder columns, for example to match the columns a CRM or another system expects."""
+
+    type: Literal["organize_columns"]
+    rename: Annotated[list[ColumnRename], Field(max_length=MAX_COLUMNS_PER_OPERATION)] = Field(
+        default_factory=list, description="New names for some columns.")
+    drop: ColumnList = Field(default_factory=list, description="Columns to remove.")
+    order: ColumnList = Field(
+        default_factory=list,
+        description="Columns to put first, in this order (current names); the other columns follow in their current order.")
+
+
+class SortKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    column: ColumnName
+    direction: Literal["asc", "desc"] = "asc"
+
+
+class SortRows(_Op):
+    """Sort the rows (numbers as numbers, dates as dates, text A-Z ignoring capitals). The download keeps this order."""
+
+    type: Literal["sort_rows"]
+    by: Annotated[list[SortKey], Field(min_length=1, max_length=5)]
+    missing: Literal["last", "first"] = Field("last", description="Where rows with an empty value go.")
+
+
 Operation = Annotated[
     Union[
         RemoveDuplicates,
@@ -318,6 +363,8 @@ Operation = Annotated[
         MapValues,
         NearDuplicates,
         FlagRows,
+        OrganizeColumns,
+        SortRows,
     ],
     Field(discriminator="type"),
 ]
@@ -325,7 +372,8 @@ Operation = Annotated[
 OPERATION_MODELS: dict[str, type[_Op]] = {
     m.model_fields["type"].annotation.__args__[0]: m  # type: ignore[union-attr]
     for m in (RemoveDuplicates, MissingValues, TrimWhitespace, StandardizeText, CleanColumnNames, ConvertType, RemoveEmpty,
-              FindReplace, SplitColumn, MergeColumns, StandardizePhone, StandardizeCountry, CleanEmail, CleanNumbers, MapValues, NearDuplicates, FlagRows)
+              FindReplace, SplitColumn, MergeColumns, StandardizePhone, StandardizeCountry, CleanEmail, CleanNumbers, MapValues, NearDuplicates, FlagRows,
+              OrganizeColumns, SortRows)
 }
 
 

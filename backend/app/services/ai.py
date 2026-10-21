@@ -250,6 +250,10 @@ def _columns_in(op) -> list[str]:
         value = getattr(op, field, None)
         if isinstance(value, str):
             cols.append(value)
+    for field in ("drop", "order"):
+        cols += list(getattr(op, field, None) or [])
+    for item in [*(getattr(op, "rename", None) or []), *(getattr(op, "by", None) or [])]:
+        cols.append(item.column)
     for rule in getattr(op, "rules", None) or []:
         cols.append(rule.column)
         if rule.region_column:

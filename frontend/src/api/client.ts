@@ -254,10 +254,10 @@ export const api = {
     request<CompareRowsPage>(`/api/compare/rows${qs({ page, page_size: pageSize, changes_only: changesOnly || undefined })}`),
 
   /** Downloads the current working dataset and returns the filename used. */
-  async exportFile(filename: string, format: ExportFormat, bom: boolean, protectFormulas = false, includeReport = false): Promise<string> {
+  async exportFile(filename: string, format: ExportFormat, bom: boolean, protectFormulas = false, includeReport = false, highlight = false): Promise<string> {
     const sid = getSessionId();
     const response = await send(
-      `${BASE}/api/export${qs({ filename, format, bom: format === "csv" ? bom : undefined, protect_formulas: format === "csv" && protectFormulas ? true : undefined, include_report: format === "xlsx" && includeReport ? true : undefined })}`,
+      `${BASE}/api/export${qs({ filename, format, bom: format === "csv" ? bom : undefined, protect_formulas: format === "csv" && protectFormulas ? true : undefined, include_report: format === "xlsx" && includeReport ? true : undefined, highlight: format === "xlsx" && highlight ? true : undefined })}`,
       { headers: sid ? { "X-Session-Id": sid } : {} },
       TIMEOUT_MS * 3, // Excel export of a large dataset can be slow
     );

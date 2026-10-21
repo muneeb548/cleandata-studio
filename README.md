@@ -38,11 +38,13 @@ CleanData Studio is a web application for cleaning messy tabular data without wr
   - Clean email addresses (spaces, capitals, `mailto:`, optional provider typo fixes) and list invalid ones
   - Clean amounts in any currency and number style (`$1,250.00`, `Rs 1,25,000`, `1.234,56 €`, `(500)`) into real numbers, with a warning when one column mixes currencies
   - Find near-duplicates (same record written differently, optional small spelling differences) and flag or remove them
-  - Flag rows for review in a new column (missing, invalid email or phone, not a number or date, repeated value) without changing any data
+  - Flag rows for review in a new column (missing, invalid email or phone, not a number or date, repeated value, outside an allowed range such as age 0–100 or dates in 2024) without changing any data
+  - Organize columns: rename, remove and reorder them (for CRM imports), and sort rows by up to five columns (numbers, dates and text each sorted correctly; the download keeps the order)
+  - Mark words such as "Unknown" or "TBD" as missing; amounts written in words ("thirty", "1.5 million") become numbers in Clean numbers
 - **Workflow safety** — original dataset never modified; undo last step; reset to original; confirmation dialogs for destructive steps; activity log; operations that change nothing are not recorded as applied.
 - **Before/after comparison** — real counts for rows, columns, missing cells, duplicates, completeness, rows/columns removed, cells modified, per-operation log and side-by-side previews.
 - **Change report and recipes** — a ready-to-send summary of every change for the client (copy, `.txt`, or a "Cleaning report" sheet in the Excel download), and cleaning recipes: save the applied steps as a `.json` file and apply them to next week's file with one click (the recipe holds only the steps, never data).
-- **Export** — CSV (UTF-8, optional BOM for Excel) or Excel `.xlsx`, generated from the current working data and streamed from a temporary file. Text that starts with `=` is stored as text in Excel (never as a formula); Excel's row/column/cell-length limits produce a clear error instead of a truncated file.
+- **Export** — CSV (UTF-8, optional BOM for Excel) or Excel `.xlsx` (optionally with cells that still need a look coloured, like conditional formatting, plus a colour key), generated from the current working data and streamed from a temporary file. Text that starts with `=` is stored as text in Excel (never as a formula); Excel's row/column/cell-length limits produce a clear error instead of a truncated file.
 - **Large files** — uploads are streamed to a temporary file; CSV/TSV is parsed by pandas' C parser and JSON by a streaming parser; undo history shares unchanged columns between steps (copy-on-write) and keeps older steps only within a memory budget; profiles, column types and sorted views are cached per dataset version.
 - **Privacy** — data kept in server memory only (temporary files exist just for the duration of an import or download), random 256-bit session IDs, 30-minute inactivity expiry, no external APIs, no cell values in logs, security headers, rate limiting.
 - **Public site** — landing page, features, how it works, operations, privacy, FAQ, about, privacy policy, contact/feedback, 404, SEO meta tags, Open Graph image, favicon, robots.txt, sitemap.xml.
@@ -264,7 +266,7 @@ All endpoints except health/config/upload/operations catalog require the header 
 | POST | `/api/reset` | Restore the original upload |
 | GET | `/api/compare` | Before/after statistics |
 | GET | `/api/compare/rows?page=&page_size=&changes_only=` | Row-level comparison with changed cells flagged |
-| GET | `/api/export?filename=&format=csv\|xlsx&bom=&protect_formulas=` | Download the working data |
+| GET | `/api/export?filename=&format=csv\|xlsx&bom=&protect_formulas=&include_report=&highlight=` | Download the working data |
 | GET | `/api/ai/status` | Is the AI assistant on and ready, where does it run, what is shared |
 | POST | `/api/ai/plan` | Plain-language request → validated cleaning steps (nothing is changed) |
 | POST | `/api/ai/map-values` | Suggested value mapping for one column |

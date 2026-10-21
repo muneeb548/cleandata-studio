@@ -1,5 +1,5 @@
 import type { ColumnProfile } from "@/api/types";
-import { DEFAULT_FORM, buildOperation, columnRestriction, formForIssue, mappingRows } from "./operationForms";
+import { DEFAULT_FORM, buildOperation, columnRestriction, formForIssue, mappingRows, missingWords } from "./operationForms";
 
 const col = (name: string, type: ColumnProfile["type"], is_text = true): ColumnProfile => ({
   name,
@@ -207,5 +207,46 @@ describe("Fix buttons for contact details and amounts", () => {
     expect(f.phoneRegionSource).toBe("column");
     expect(f.phoneRegionColumn).toBe("country");
     expect(formForIssue("standardize_phone", "phone", "phones:phone", [col("phone", "text")], DEFAULT_FORM).phoneRegionSource).toBe("fixed");
+  });
+});
+
+describe("organize, sort, mark missing and range checks", () => {
+  it("builds organize_columns from the table", () => {
+    const f = { ...DEFAULT_FORM, orgOrder: ["name", "id", "score"], orgRenames: { name: "Full Name", id: " id " }, orgDrop: ["score"] };
+    expect(buildOperation("organize_columns", f)).toEqual({
+      operation: { type: "organize_columns", rename: [{ column: "name", to: "Full Name" }], drop: ["score"], order: ["name", "id"] },
+    });
+  });
+
+  it("refuses two columns with the same final name or removing everything", () => {
+    expect(buildOperation("organize_columns", { ...DEFAULT_FORM, orgOrder: ["a", "b"], orgRenames: { a: "b" } }).error).toMatch(/Two columns/);
+    expect(buildOperation("organize_columns", { ...DEFAULT_FORM, orgOrder: ["a"], orgDrop: ["a"] }).error).toMatch(/at least one/);
+  });
+
+  it("builds sort_rows and ignores empty keys", () => {
+    const f = { ...DEFAULT_FORM, sortKeys: [{ column: "city", direction: "asc" as const }, { column: "", direction: "desc" as const }] };
+    expect(buildOperation("sort_rows", f)).toEqual({ operation: { type: "sort_rows", by: [{ column: "city", direction: "asc" }], missing: "last" } });
+    expect(buildOperation("sort_rows", { ...DEFAULT_FORM, sortKeys: [{ column: "", direction: "asc" }] }).error).toBeTruthy();
+  });
+
+  it("turns 'mark as missing' into a value mapping to empty", () => {
+    expect(missingWords("Unknown, TBD,\n unknown ,,")).toEqual(["Unknown", "TBD", "unknown"]);
+    const op = buildOperation("mark_missing", { ...DEFAULT_FORM, mmColumns: ["age"], mmWords: "Unknown, TBD" }).operation;
+    expect(op).toEqual({ type: "map_values", columns: ["age"], mappings: [{ value: "Unknown", to: "" }, { value: "TBD", to: "" }], ignore_case: true });
+  });
+
+  it("sends range limits only for range checks", () => {
+    const f = {
+      ...DEFAULT_FORM,
+      flagRules: [
+        { column: "age", check: "out_of_range" as const, min: "0", max: " 100 " },
+        { column: "email", check: "missing" as const, min: "ignored" },
+      ],
+    };
+    expect(buildOperation("flag_rows", f).operation).toEqual({
+      type: "flag_rows",
+      rules: [{ column: "age", check: "out_of_range", min: "0", max: "100" }, { column: "email", check: "missing" }],
+      column_name: "needs_review",
+    });
   });
 });

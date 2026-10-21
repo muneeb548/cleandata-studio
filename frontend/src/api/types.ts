@@ -170,7 +170,9 @@ export type OperationType =
   | "clean_numbers"
   | "map_values"
   | "near_duplicates"
-  | "flag_rows";
+  | "flag_rows"
+  | "organize_columns"
+  | "sort_rows";
 
 export interface QuickStep {
   id: string;
@@ -234,8 +236,17 @@ export interface ColumnValues {
   truncated: boolean;
 }
 
-export type FlagCheck = "missing" | "invalid_email" | "invalid_phone" | "not_number" | "not_date" | "duplicate_value";
-export type FlagRule = { column: string; check: FlagCheck; region?: string | null; region_column?: string | null };
+export type FlagCheck = "missing" | "invalid_email" | "invalid_phone" | "not_number" | "not_date" | "duplicate_value" | "out_of_range";
+export type FlagRule = {
+  column: string;
+  check: FlagCheck;
+  region?: string | null;
+  region_column?: string | null;
+  /** out_of_range only: smallest / largest allowed value (a number or a date) */
+  min?: string | null;
+  max?: string | null;
+};
+export type SortKey = { column: string; direction: "asc" | "desc" };
 
 export type Operation =
   | { type: "remove_duplicates"; keep: "first" | "last" }
@@ -287,7 +298,9 @@ export type Operation =
   | { type: "clean_numbers"; columns: string[]; decimal: "auto" | "." | ","; on_error: "abort" | "set_missing" }
   | { type: "map_values"; columns: string[]; mappings: { value: string; to: string }[]; ignore_case: boolean }
   | { type: "near_duplicates"; columns: string[]; match: "normalized" | "similar"; action: "flag" | "remove"; column_name: string }
-  | { type: "flag_rows"; rules: FlagRule[]; column_name: string };
+  | { type: "flag_rows"; rules: FlagRule[]; column_name: string }
+  | { type: "organize_columns"; rename: { column: string; to: string }[]; drop: string[]; order: string[] }
+  | { type: "sort_rows"; by: SortKey[]; missing: "last" | "first" };
 
 export interface CellChange {
   row: number;

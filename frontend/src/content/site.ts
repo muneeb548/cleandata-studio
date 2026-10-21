@@ -105,7 +105,9 @@ export const OPERATIONS: OperationInfo[] = [
   { icon: Banknote, title: "Amounts in any currency", description: "“$1,250.00”, “Rs 1,25,000” and “1.234,56 €” become real numbers." },
   { icon: Split, title: "Split and merge columns", description: "Full name into first and last name, or several columns into one." },
   { icon: Users, title: "Near-duplicates", description: "Find the same record written differently, even with small spelling mistakes." },
-  { icon: Flag, title: "Flag rows for review", description: "Add a column that says why a row needs attention, without changing data." },
+  { icon: Flag, title: "Flag rows for review", description: "Missing, invalid or out-of-range values (age 0–100), without changing data." },
+  { icon: TableProperties, title: "Organize columns and sort", description: "Rename, remove and reorder columns for a CRM import; sort rows." },
+  { icon: FileSpreadsheet, title: "Coloured Excel download", description: "Cells that still need a look are highlighted, with a colour key." },
   { icon: History, title: "Activity log", description: "Every applied step is recorded with what it changed." },
 ];
 

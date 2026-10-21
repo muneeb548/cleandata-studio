@@ -39,8 +39,10 @@ from app.schemas.operations import (  # noqa: E402,F401
     MissingValues,
     NearDuplicates,
     Operation,
+    OrganizeColumns,
     RemoveDuplicates,
     RemoveEmpty,
+    SortRows,
     SplitColumn,
     StandardizeCountry,
     StandardizePhone,
@@ -50,7 +52,7 @@ from app.schemas.operations import (  # noqa: E402,F401
 
 DESTRUCTIVE_TYPES = {"remove_duplicates", "remove_empty"}
 # Operation types that can remove rows or columns with at least one of their settings.
-DATA_LOSS_TYPES = DESTRUCTIVE_TYPES | {"missing_values", "split_column", "merge_columns", "near_duplicates"}
+DATA_LOSS_TYPES = DESTRUCTIVE_TYPES | {"missing_values", "split_column", "merge_columns", "near_duplicates", "organize_columns"}
 
 
 def is_destructive(op: BaseModel) -> bool:
@@ -63,6 +65,8 @@ def is_destructive(op: BaseModel) -> bool:
         return not op.keep_originals
     if op.type == "near_duplicates":
         return op.action == "remove"
+    if op.type == "organize_columns":
+        return bool(op.drop)
     return op.type == "missing_values" and op.strategy in ("drop_rows", "drop_columns")
 
 
@@ -82,7 +86,7 @@ class OpResult:
     @property
     def changed(self) -> bool:
         return bool(self.rows_removed or self.columns_removed or self.cells_changed or self.details.get("renamed")
-                    or self.details.get("added_columns"))
+                    or self.details.get("added_columns") or self.details.get("reordered"))
 
 
 # --------------------------------------------------------------------------- helpers
@@ -812,6 +816,46 @@ def _guess_decimal(s: str) -> tuple[str, bool]:
     return ".", False
 
 
+_WORD_UNITS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+    "seventeen eighteen nineteen".split())}
+_WORD_TENS = {w: 10 * i for i, w in enumerate("_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()) if w != "_"}
+_WORD_SCALES = {"thousand": 10**3, "million": 10**6, "billion": 10**9}
+
+
+def words_to_number(text: str) -> float | None:
+    """English number words as a number: "thirty" -> 30, "two hundred and five" -> 205,
+    "1.5 million" -> 1500000, "minus ten" -> -10. None when the text is not a number in words."""
+    words = re.sub(r"[-,]", " ", text.strip().lower()).split()
+    if not words:
+        return None
+    negative = words[0] in ("minus", "negative")
+    if negative:
+        words = words[1:]
+    total, current, seen = 0.0, 0.0, False
+    for word in words:
+        if word == "and" and seen:
+            continue
+        if word in _WORD_UNITS:
+            current += _WORD_UNITS[word]
+        elif word in _WORD_TENS:
+            current += _WORD_TENS[word]
+        elif word == "hundred":
+            current = (current or 1) * 100
+        elif word in _WORD_SCALES:
+            total += (current or 1) * _WORD_SCALES[word]
+            current = 0
+        elif re.fullmatch(r"\d+(\.\d+)?", word) and not seen:
+            current = float(word)  # "1.5 million"
+        else:
+            return None
+        seen = True
+    if not seen:
+        return None
+    value = total + current
+    return -value if negative else value
+
+
 def parse_amount(raw: str, decimal: str = "auto") -> tuple[float | None, str | None, bool]:
     """(number, currency mark, ambiguous) for text like "$1,250.00", "Rs 1,250", "1.234,56 €" or "(500)"."""
     s = raw.strip()
@@ -862,6 +906,8 @@ def clean_numbers(df: pd.DataFrame, op: CleanNumbers) -> OpResult:
     invalid_samples: list[dict] = []
     currencies: dict[str, set[str]] = {}
     ambiguous_total = 0
+    from_words: set[str] = set()
+    words_total = 0
     for c in cols:
         s = df[c]
         text = _canon(s).str.strip()
@@ -874,8 +920,16 @@ def clean_numbers(df: pd.DataFrame, op: CleanNumbers) -> OpResult:
                 bad_flags.append(False)
                 continue
             if value not in cache:
-                cache[value] = parse_amount(value, op.decimal)
+                parsed = parse_amount(value, op.decimal)
+                if parsed[0] is None and parsed[1] is None:
+                    words = words_to_number(value)
+                    if words is not None:
+                        parsed = (words, None, False)
+                        from_words.add(value)
+                cache[value] = parsed
             number, currency, ambiguous = cache[value]
+            if value in from_words:
+                words_total += 1
             numbers.append(number)
             bad_flags.append(number is None)
             if currency:
@@ -901,6 +955,9 @@ def clean_numbers(df: pd.DataFrame, op: CleanNumbers) -> OpResult:
         if len(marks) > 1:
             warnings.append(f'"{c}" mixes currencies ({", ".join(sorted(marks))}). The numbers were kept as they are, '
                             "not converted between currencies.")
+    if words_total:
+        examples = ", ".join(f'"{w}"' for w in sorted(from_words)[:3])
+        warnings.append(f"{_plural(words_total, 'value')} written in words ({examples}) became numbers. Check them.")
     if ambiguous_total and op.decimal == "auto":
         warnings.append(f"{_plural(ambiguous_total, 'value')} like 1,250 or 1.250 can be read two ways and "
                         "were read the US/UK way (1,250 = 1250 and 1.250 = 1.25). If the file uses the European "
@@ -1094,7 +1151,43 @@ FLAG_LABELS = {
     "not_number": "Not a number in {col}",
     "not_date": "Not a date in {col}",
     "duplicate_value": "Repeated {col}",
+    "out_of_range": "{col} out of range",
 }
+
+
+def _bound(text: str | None) -> tuple[str, Any] | None:
+    """("number", 120.0) or ("date", Timestamp) for a range limit, None when empty."""
+    if text is None or not str(text).strip():
+        return None
+    number, _, _ = parse_amount(str(text))
+    if number is not None:
+        return "number", number
+    when = pd.to_datetime(pd.Series([str(text).strip()]), errors="coerce").iloc[0]
+    if pd.notna(when):
+        return "date", when
+    raise AppError("invalid_range", f'"{text}" is not a number or a date.',
+                   "Enter limits such as 0 and 120, or 2024-01-01 and 2024-12-31.")
+
+
+def _out_of_range(s: pd.Series, rule) -> pd.Series:
+    low, high = _bound(rule.min), _bound(rule.max)
+    if low is None and high is None:
+        raise AppError("invalid_range", f'Enter a smallest or largest allowed value for "{rule.column}".', None)
+    kinds = {b[0] for b in (low, high) if b}
+    if len(kinds) > 1:
+        raise AppError("invalid_range", "Use two numbers or two dates for a range, not one of each.", None)
+    if kinds == {"number"}:
+        values = numeric_view(s)
+    elif pd.api.types.is_datetime64_any_dtype(s):
+        values = s
+    else:
+        values = pd.to_datetime(_canon(s).str.strip(), errors="coerce", format="mixed")
+    mask = pd.Series(False, index=s.index)
+    if low is not None:
+        mask |= (values < low[1]).fillna(False).astype(bool)
+    if high is not None:
+        mask |= (values > high[1]).fillna(False).astype(bool)
+    return mask  # values that are not numbers/dates are left to the "not_number"/"not_date" checks
 
 
 def _flag_mask(df: pd.DataFrame, rule) -> pd.Series:
@@ -1128,6 +1221,8 @@ def _flag_mask(df: pd.DataFrame, rule) -> pd.Series:
             return pd.Series(False, index=s.index)
         parsed = pd.to_datetime(_canon(s).str.strip(), errors="coerce", format="mixed")
         return present & parsed.isna()
+    if rule.check == "out_of_range":
+        return _out_of_range(s, rule)
     # duplicate_value: the same value (ignoring case and outer spaces) appears in more than one row
     key = _canon(s).str.strip().str.lower()
     return present & key.duplicated(keep=False).fillna(False).astype(bool)
@@ -1165,6 +1260,78 @@ def flag_rows(df: pd.DataFrame, op: FlagRows) -> OpResult:
                     details={"added_columns": added, "rule_counts": counts, "touched": [name]})
 
 
+def organize_columns(df: pd.DataFrame, op: OrganizeColumns) -> OpResult:
+    renames = {r.column: r.to for r in op.rename}
+    _require_columns(df, [*renames, *op.drop, *op.order], allow_empty=True)
+    if len(renames) != len(op.rename):
+        raise AppError("conflicting_rename", "The same column is renamed twice.", "Keep one new name for each column.")
+    both = set(renames) & set(op.drop)
+    if both:
+        raise AppError("conflicting_columns", f'"{sorted(both)[0]}" is both renamed and removed.', "Choose one of the two.")
+    in_order = set(op.order) & set(op.drop)
+    if in_order:
+        raise AppError("conflicting_columns", f'"{sorted(in_order)[0]}" is both removed and moved.', "Choose one of the two.")
+    kept = [str(c) for c in df.columns if str(c) not in set(op.drop)]
+    if not kept:
+        raise AppError("no_columns_left", "This would remove every column.", "Keep at least one column.")
+    order = list(dict.fromkeys(op.order)) + [c for c in kept if c not in set(op.order)]
+    final = [renames.get(c, c) for c in order]
+    if len(set(final)) != len(final):
+        taken = next(n for n in final if final.count(n) > 1)
+        raise AppError("name_taken", f'There would be two columns called "{taken}".',
+                       "Choose a different new name, or also rename or remove the other column.")
+    out = df[order].copy(deep=False)
+    out.columns = final
+    renamed = [c for c in order if renames.get(c, c) != c]
+    reordered = order != kept
+    if not (renamed or op.drop or reordered):
+        return OpResult(out, "Nothing to change: the columns already look like this.")
+    parts = []
+    if op.drop:
+        parts.append(f"removed {_plural(len(op.drop), 'column')}")
+    if renamed:
+        parts.append(f"renamed {_plural(len(renamed), 'column')}")
+    if reordered:
+        parts.append("changed the column order")
+    summary = (", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]).capitalize() + "."
+    mapping = [{"before": c, "after": renames.get(c, c)} for c in order]
+    return OpResult(out, summary, columns_removed=len(op.drop),
+                    details={"mapping": mapping, "renamed": len(renamed), "removed_columns": list(op.drop),
+                             "reordered": reordered})
+
+
+def _sort_key(s: pd.Series) -> pd.Series:
+    if is_numeric_type(logical_type(s)):
+        return numeric_view(s)
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s
+    return _canon(s).str.strip().str.casefold()
+
+
+def sort_rows(df: pd.DataFrame, op: SortRows) -> OpResult:
+    cols = _require_columns(df, [k.column for k in op.by])
+    if len(cols) != len(op.by):
+        raise AppError("duplicate_sort_column", "Each column can be used only once for sorting.", None)
+    keys = pd.DataFrame({f"k{i}": _sort_key(df[k.column]).reset_index(drop=True) for i, k in enumerate(op.by)})
+    positions = keys.sort_values(by=list(keys.columns), ascending=[k.direction == "asc" for k in op.by],
+                                 na_position=op.missing, kind="mergesort").index
+    out = df.iloc[positions].copy(deep=False)
+    reordered = not positions.equals(pd.RangeIndex(len(df)))
+    def words(k) -> str:
+        s = df[k.column]
+        if is_numeric_type(logical_type(s)):
+            return "smallest first" if k.direction == "asc" else "largest first"
+        if pd.api.types.is_datetime64_any_dtype(s):
+            return "oldest first" if k.direction == "asc" else "newest first"
+        return "A to Z" if k.direction == "asc" else "Z to A"
+
+    how = ", then ".join(f'"{k.column}" ({words(k)})' for k in op.by)
+    if not reordered:
+        return OpResult(out, f"The rows are already sorted by {how}.")
+    return OpResult(out, f"Sorted {_plural(len(df), 'row')} by {how}. Empty values are {op.missing}.",
+                    details={"reordered": True})
+
+
 HANDLERS = {
     "remove_duplicates": remove_duplicates,
     "missing_values": missing_values,
@@ -1183,6 +1350,8 @@ HANDLERS = {
     "map_values": map_values,
     "near_duplicates": near_duplicates,
     "flag_rows": flag_rows,
+    "organize_columns": organize_columns,
+    "sort_rows": sort_rows,
 }
 
 LABELS = {
@@ -1203,6 +1372,8 @@ LABELS = {
     "map_values": "Map values",
     "near_duplicates": "Find near-duplicates",
     "flag_rows": "Flag rows for review",
+    "organize_columns": "Organize columns",
+    "sort_rows": "Sort rows",
 }
 
 

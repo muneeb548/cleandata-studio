@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+import numpy as np
 import pandas as pd
 
 from app.core.errors import AppError
@@ -34,12 +35,51 @@ def escape_formulas(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# Highlight codes for Excel downloads (0 = no colour).
+EMPTY, PROBLEM, DUPLICATE = 1, 2, 3
+HIGHLIGHT_COLOURS = {EMPTY: "E7E6E6", PROBLEM: "FFE699", DUPLICATE: "F8CBAD"}
+HIGHLIGHT_KEY = [
+    ("Grey", EMPTY, "Empty cell."),
+    ("Yellow", PROBLEM, 'Value that needs a look: "N/A"-style text, only spaces, extra spaces at the start or end, '
+                        "an invalid email address, or a row marked in a review column."),
+    ("Orange", DUPLICATE, "Row that is an exact copy of an earlier row."),
+]
+_EMAIL_NAME = re.compile(r"e-?mail", re.IGNORECASE)
+_REVIEW_NAME = re.compile(r"^(needs_review|duplicate_group)$")
+
+
+def highlight_codes(df: pd.DataFrame) -> np.ndarray:
+    """One code per cell (rows x columns) saying which colour the cell gets in an Excel download."""
+    from app.services.operations import EMAIL_RE
+    from app.services.profiling import PLACEHOLDER_TOKENS
+
+    rows, cols = df.shape
+    codes = np.zeros((rows, cols), dtype=np.int8)
+    if not rows or not cols:
+        return codes
+    for j, name in enumerate(df.columns):
+        s = df.iloc[:, j]
+        codes[s.isna().to_numpy(), j] = EMPTY
+        if not pd.api.types.is_string_dtype(s) or pd.api.types.is_bool_dtype(s):
+            continue
+        stripped = s.str.strip()
+        bad = (stripped.str.lower().isin(PLACEHOLDER_TOKENS) | (stripped == "") | (s != stripped)).fillna(False)
+        if _EMAIL_NAME.search(str(name)):
+            bad |= (s.notna() & ~stripped.str.fullmatch(EMAIL_RE).fillna(False)).fillna(False)
+        if _REVIEW_NAME.match(str(name)):
+            bad = s.notna()  # the cell that explains why the row needs attention
+        codes[bad.to_numpy(dtype=bool), j] = PROBLEM
+    duplicate = df.duplicated(keep="first").to_numpy()
+    codes[duplicate, :] = DUPLICATE
+    return codes
+
+
 def write_export(df: pd.DataFrame, path: str, fmt: str, *, bom: bool = False, protect_formulas: bool = False,
-                 report_lines: list[str] | None = None) -> None:
+                 report_lines: list[str] | None = None, highlight: bool = False) -> None:
     if fmt == "csv":
         write_csv(escape_formulas(df) if protect_formulas else df, path, bom=bom)
     elif fmt == "xlsx":
-        write_xlsx(df, path, report_lines=report_lines)
+        write_xlsx(df, path, report_lines=report_lines, highlight=highlight)
     else:  # pragma: no cover - validated by the caller
         raise AppError("invalid_format", f'Cannot export as "{fmt}".', None)
 
@@ -64,11 +104,16 @@ def _python_values(col: pd.Series) -> list:
     return out.where(col.notna(), None).tolist()
 
 
-def write_xlsx(df: pd.DataFrame, path: str, *, report_lines: list[str] | None = None) -> None:
-    """The data on a "Cleaned data" sheet, plus an optional "Cleaning report" sheet for the client."""
+def write_xlsx(df: pd.DataFrame, path: str, *, report_lines: list[str] | None = None, highlight: bool = False) -> None:
+    """The data on a "Cleaned data" sheet, plus an optional "Cleaning report" sheet for the client.
+
+    highlight=True colours cells that still need a look (see HIGHLIGHT_KEY) and adds a "Colour key" sheet.
+    """
     try:
         from openpyxl import Workbook
         from openpyxl.cell import WriteOnlyCell
+        from openpyxl.cell.cell import Cell
+        from openpyxl.styles import PatternFill
     except ImportError as exc:  # pragma: no cover - dependency is in requirements.txt
         raise AppError("missing_dependency", "Excel export is not installed on the server.",
                        "Run: pip install -r requirements.txt", status=501) from exc
@@ -85,6 +130,14 @@ def write_xlsx(df: pd.DataFrame, path: str, *, report_lines: list[str] | None = 
 
     wb = Workbook(write_only=True)
     ws = wb.create_sheet("Cleaned data")
+
+    fills = {code: PatternFill("solid", start_color=colour, end_color=colour) for code, colour in HIGHLIGHT_COLOURS.items()}
+    codes = highlight_codes(df) if highlight else None
+
+    def coloured(value, code: int, sheet=None):
+        cell = value if isinstance(value, Cell) else WriteOnlyCell(sheet or ws, value=value)
+        cell.fill = fills[code]
+        return cell
 
     def safe(value, column: str):
         if isinstance(value, str):
@@ -109,14 +162,25 @@ def write_xlsx(df: pd.DataFrame, path: str, *, report_lines: list[str] | None = 
         for start in range(0, rows, CHUNK_ROWS):
             chunk = df.iloc[start:start + CHUNK_ROWS]
             columns = [_python_values(chunk.iloc[:, i]) for i in range(cols)]
-            for row in zip(*columns) if cols else ():
-                ws.append([safe(v, names[i]) for i, v in enumerate(row)])
+            if codes is None:
+                for row in zip(*columns) if cols else ():
+                    ws.append([safe(v, names[i]) for i, v in enumerate(row)])
+            else:
+                for r, row in enumerate(zip(*columns) if cols else ()):
+                    row_codes = codes[start + r]
+                    ws.append([coloured(safe(v, names[i]), row_codes[i]) if row_codes[i] else safe(v, names[i])
+                               for i, v in enumerate(row)])
     except BaseException:
         try:
             ws.close()  # finish the half-written sheet stream cleanly before giving up
         except Exception:
             pass
         raise
+    if codes is not None:
+        key = wb.create_sheet("Colour key")
+        key.append(["Colour", "Meaning", "Cells"])
+        for label, code, meaning in HIGHLIGHT_KEY:
+            key.append([coloured(label, code, key), meaning, int((codes == code).sum())])
     if report_lines:
         report = wb.create_sheet("Cleaning report")
         for line in report_lines:

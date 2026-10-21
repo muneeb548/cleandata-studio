@@ -250,7 +250,7 @@ def _describe(before: pd.DataFrame, op: BaseModel, result) -> dict:
     changes: dict = {"cell_samples": [], "removed_rows": None, "removed_columns": [], "mapping": None}
 
     rename = None
-    if op.type == "clean_column_names":
+    if op.type in ("clean_column_names", "organize_columns"):
         mapping = result.details.get("mapping", [])
         changes["mapping"] = mapping
         rename = {m["before"]: m["after"] for m in mapping}
@@ -585,7 +585,8 @@ EXPORT_FORMATS = {"csv": ("text/csv; charset=utf-8", ".csv"),
 
 
 def export_file(session: Session, filename: str | None = None, fmt: str = "csv", bom: bool = False,
-                protect_formulas: bool = False, include_report: bool = False) -> tuple[str, str, str]:
+                protect_formulas: bool = False, include_report: bool = False,
+                highlight: bool = False) -> tuple[str, str, str]:
     """Write the current working data to a temporary file.
 
     Returns (path, download name, media type). The caller streams the file and
@@ -601,7 +602,8 @@ def export_file(session: Session, filename: str | None = None, fmt: str = "csv",
     fd, path = tempfile.mkstemp(prefix="cleandata_export_", suffix=ext)
     os.close(fd)
     try:
-        write_export(df, path, fmt, bom=bom, protect_formulas=protect_formulas, report_lines=report_lines)
+        write_export(df, path, fmt, bom=bom, protect_formulas=protect_formulas, report_lines=report_lines,
+                     highlight=highlight and fmt == "xlsx")
     except BaseException:
         _remove(path)
         raise

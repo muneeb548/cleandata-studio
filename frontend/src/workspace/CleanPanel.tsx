@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowDownUp,
+  ArrowUp,
   CaseSensitive,
   Check,
   CheckCircle2,
@@ -49,6 +51,7 @@ import {
   columnRestriction,
   formForIssue,
   isNumeric,
+  missingWords,
   type CategoryId,
   type CleanChoice,
   type FormState,
@@ -91,6 +94,9 @@ const EXPLANATIONS: Record<CleanChoice, string> = {
   map_values: "Shows every different value in a column so you can rename many of them at once.",
   near_duplicates: "Finds rows that are the same record written slightly differently, and marks or removes them.",
   flag_rows: "Marks rows that need a human decision in a new column, without changing or removing any data.",
+  organize_columns: "Renames, removes and reorders columns, for example to match the columns a CRM or another system expects.",
+  sort_rows: "Sorts the rows by one or more columns. Numbers sort as numbers, dates as dates, and the download keeps this order.",
+  mark_missing: "Turns words that mean “no value” (Unknown, TBD, ---) into real empty cells, so they count as missing and can be filled.",
 };
 
 const SHORT_LABELS: Partial<Record<CleanChoice, string>> = {
@@ -107,6 +113,11 @@ const SHORT_LABELS: Partial<Record<CleanChoice, string>> = {
   map_values: "Map many values",
   remove_duplicates: "Exact copies",
   near_duplicates: "Near-duplicates",
+  organize_columns: "Organize",
+  sort_rows: "Sort rows",
+  clean_column_names: "Tidy names",
+  missing_values: "Fill or remove",
+  mark_missing: "Mark as missing",
 };
 
 function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
@@ -221,6 +232,30 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
           <FieldHint>Missing values stay missing.</FieldHint>
         </div>
       );
+
+    case "organize_columns":
+      return <OrganizeColumnsForm form={form} set={set} cols={cols} />;
+
+    case "sort_rows":
+      return <SortRowsForm form={form} set={set} cols={cols} />;
+
+    case "mark_missing": {
+      const words = missingWords(form.mmWords);
+      return (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="mm-words">Words that mean “no value”</Label>
+            <Input id="mm-words" value={form.mmWords} maxLength={2000} onChange={(e) => set({ mmWords: e.target.value })} />
+            <FieldHint>
+              Separate them with commas. Capitals and outer spaces are ignored.{" "}
+              {words.length > 0 && `${pluralize(words.length, "word")}: ${words.slice(0, 8).map((w) => `“${w}”`).join(", ")}${words.length > 8 ? " …" : ""}`}
+            </FieldHint>
+          </div>
+          <ColumnPicker id="mm-cols" columns={cols} selected={form.mmColumns} onChange={(mmColumns) => set({ mmColumns })} disabledReason={restrict} />
+          <FieldHint>Only whole cells are matched: “Unknown” becomes empty, “Unknown street” stays as it is. “N/A”, “null” and similar are already counted as missing.</FieldHint>
+        </div>
+      );
+    }
 
     case "clean_column_names":
       return (
@@ -652,13 +687,154 @@ function MapValuesForm({ form, set, cols }: { form: FormState; set: (patch: Part
   );
 }
 
+function OrganizeColumnsForm({ form, set, cols }: { form: FormState; set: (patch: Partial<FormState>) => void; cols: ColumnProfile[] }) {
+  const names = cols.map((c) => c.name);
+  const signature = names.join("\u0000");
+  useEffect(() => {
+    const valid = form.orgOrder.length === names.length && form.orgOrder.every((n) => names.includes(n));
+    if (!valid) set({ orgOrder: names, orgRenames: {}, orgDrop: [] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature]);
+  const order = form.orgOrder.length === names.length ? form.orgOrder : names;
+  const move = (i: number, step: -1 | 1) => {
+    const j = i + step;
+    if (j < 0 || j >= order.length) return;
+    const next = [...order];
+    [next[i], next[j]] = [next[j], next[i]];
+    set({ orgOrder: next });
+  };
+  const toggleDrop = (name: string, on: boolean) => set({ orgDrop: on ? [...form.orgDrop, name] : form.orgDrop.filter((d) => d !== name) });
+  const changes = order.filter((c) => (form.orgRenames[c] ?? "").trim() && form.orgRenames[c].trim() !== c).length + form.orgDrop.length;
+  return (
+    <div className="space-y-3">
+      <p className="text-body text-muted-foreground">
+        Type a new name, tick <em>Remove</em>, or use the arrows to change the order. Useful when a CRM or another system expects exact column names.
+        {changes > 0 && ` ${pluralize(changes, "change")} so far.`}
+      </p>
+      <div className="scroll-thin max-h-96 overflow-auto rounded-md border border-border">
+        <Table>
+          <THead>
+            <tr>
+              <TH scope="col" className="w-10 pl-3">#</TH>
+              <TH scope="col">Column</TH>
+              <TH scope="col">New name</TH>
+              <TH scope="col" className="text-center">Move</TH>
+              <TH scope="col" className="pr-3">Remove</TH>
+            </tr>
+          </THead>
+          <tbody>
+            {order.map((name, i) => {
+              const dropped = form.orgDrop.includes(name);
+              return (
+                <TR key={name} className={dropped ? "bg-danger-soft/40" : undefined}>
+                  <TD className="tabular pl-3 text-slate-500">{i + 1}</TD>
+                  <TD className={cn("max-w-48 truncate font-medium", dropped ? "text-slate-400 line-through" : "text-foreground")} title={name}>
+                    {name}
+                  </TD>
+                  <TD>
+                    <Input
+                      aria-label={`New name for ${name}`}
+                      value={form.orgRenames[name] ?? ""}
+                      maxLength={200}
+                      placeholder="keep name"
+                      disabled={dropped}
+                      onChange={(e) => set({ orgRenames: { ...form.orgRenames, [name]: e.target.value } })}
+                    />
+                  </TD>
+                  <TD className="whitespace-nowrap text-center">
+                    <Button variant="ghost" size="icon" aria-label={`Move ${name} up`} disabled={i === 0} onClick={() => move(i, -1)}>
+                      <ArrowUp />
+                    </Button>
+                    <Button variant="ghost" size="icon" aria-label={`Move ${name} down`} disabled={i === order.length - 1} onClick={() => move(i, 1)}>
+                      <ArrowDown />
+                    </Button>
+                  </TD>
+                  <TD className="pr-3">
+                    <Checkbox id={`org-drop-${i}`} checked={dropped} onChange={(e) => toggleDrop(name, e.target.checked)} label={<span className="sr-only">Remove {name}</span>} />
+                  </TD>
+                </TR>
+              );
+            })}
+          </tbody>
+        </Table>
+      </div>
+      {(form.orgDrop.length > 0 || changes > 0) && (
+        <Button variant="link" size="sm" onClick={() => set({ orgOrder: names, orgRenames: {}, orgDrop: [] })}>
+          Start over
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function SortRowsForm({ form, set, cols }: { form: FormState; set: (patch: Partial<FormState>) => void; cols: ColumnProfile[] }) {
+  const keys = form.sortKeys.length ? form.sortKeys : [{ column: "", direction: "asc" as const }];
+  const update = (i: number, patch: Partial<(typeof keys)[number]>) => set({ sortKeys: keys.map((k, j) => (j === i ? { ...k, ...patch } : k)) });
+  const typeOf = (name: string) => cols.find((c) => c.name === name)?.type;
+  const words = (name: string, dir: "asc" | "desc") => {
+    const t = typeOf(name);
+    if (t === "integer" || t === "decimal") return dir === "asc" ? "Smallest first" : "Largest first";
+    if (t === "datetime") return dir === "asc" ? "Oldest first" : "Newest first";
+    return dir === "asc" ? "A to Z" : "Z to A";
+  };
+  return (
+    <div className="space-y-4">
+      <ol className="space-y-2">
+        {keys.map((k, i) => (
+          <li key={i} className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,12rem)_auto] sm:items-end">
+            <span className="text-small text-muted-foreground sm:pb-2">{i === 0 ? "Sort by" : "then by"}</span>
+            <Select aria-label={`Sort column ${i + 1}`} value={k.column} onChange={(e) => update(i, { column: e.target.value })}>
+              <option value="">Choose a column…</option>
+              {cols.map((c) => (
+                <option key={c.name} value={c.name} disabled={keys.some((o, j) => j !== i && o.column === c.name)}>
+                  {c.name}
+                </option>
+              ))}
+            </Select>
+            <Select aria-label={`Sort direction ${i + 1}`} value={k.direction} onChange={(e) => update(i, { direction: e.target.value as "asc" | "desc" })}>
+              <option value="asc">{words(k.column, "asc")}</option>
+              <option value="desc">{words(k.column, "desc")}</option>
+            </Select>
+            <Button variant="ghost" size="icon" aria-label={`Remove sort column ${i + 1}`} disabled={keys.length === 1} onClick={() => set({ sortKeys: keys.filter((_, j) => j !== i) })}>
+              <X />
+            </Button>
+          </li>
+        ))}
+      </ol>
+      {keys.length < 5 && (
+        <Button variant="secondary" size="sm" onClick={() => set({ sortKeys: [...keys, { column: "", direction: "asc" }] })}>
+          <Plus /> Add a tie-breaker column
+        </Button>
+      )}
+      <fieldset>
+        <legend className="mb-2 text-small font-medium text-slate-700">Rows with an empty value</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <RadioCard name="sort-missing" value="last" checked={form.sortMissing === "last"} onChange={() => set({ sortMissing: "last" })} label="At the end" />
+          <RadioCard name="sort-missing" value="first" checked={form.sortMissing === "first"} onChange={() => set({ sortMissing: "first" })} label="At the top" />
+        </div>
+      </fieldset>
+      <FieldHint>Text is sorted ignoring capitals. Row numbers in the preview still refer to the uploaded file.</FieldHint>
+    </div>
+  );
+}
+
 function FlagRulesForm({ form, set, cols }: { form: FormState; set: (patch: Partial<FormState>) => void; cols: ColumnProfile[] }) {
   const [column, setColumn] = useState("");
   const [check, setCheck] = useState<FlagRule["check"]>("missing");
+  const [min, setMin] = useState("");
+  const [max, setMax] = useState("");
+  const isRange = check === "out_of_range";
   const exists = form.flagRules.some((r) => r.column === column && r.check === check);
+  const rangeMissing = isRange && !min.trim() && !max.trim();
   const add = () => {
-    if (!column || exists) return;
-    set({ flagRules: [...form.flagRules, { column, check }] });
+    if (!column || exists || rangeMissing) return;
+    set({ flagRules: [...form.flagRules, isRange ? { column, check, min: min.trim() || null, max: max.trim() || null } : { column, check }] });
+  };
+  const describe = (r: FlagRule) => {
+    const base = FLAG_CHECKS.find((c) => c.value === r.check)!.label;
+    if (r.check !== "out_of_range") return base;
+    if (r.min && r.max) return `Outside ${r.min} to ${r.max}`;
+    return r.min ? `Below ${r.min}` : `Above ${r.max}`;
   };
   const usesPhone = form.flagRules.some((r) => r.check === "invalid_phone");
   return (
@@ -688,16 +864,29 @@ function FlagRulesForm({ form, set, cols }: { form: FormState; set: (patch: Part
             ))}
           </Select>
         </div>
-        <Button variant="secondary" onClick={add} disabled={!column || exists}>
+        <Button variant="secondary" onClick={add} disabled={!column || exists || rangeMissing}>
           <Plus /> Add check
         </Button>
       </div>
+      {isRange && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="flag-min">Smallest allowed value</Label>
+            <Input id="flag-min" value={min} maxLength={50} placeholder="e.g. 0 or 2024-01-01" onChange={(e) => setMin(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="flag-max">Largest allowed value</Label>
+            <Input id="flag-max" value={max} maxLength={50} placeholder="e.g. 100 or 2024-12-31" onChange={(e) => setMax(e.target.value)} />
+          </div>
+          <FieldHint className="sm:col-span-2">Fill one or both. Use numbers (age 0 to 100) or dates (orders in 2024). Values that are not numbers or dates are checked by “Not a number” / “Not a date”.</FieldHint>
+        </div>
+      )}
       {form.flagRules.length > 0 ? (
         <ul className="divide-y divide-border rounded-md border border-border">
           {form.flagRules.map((r, i) => (
             <li key={`${r.column}-${r.check}`} className="flex items-center justify-between gap-2 px-3 py-2 text-small">
               <span>
-                <strong className="font-medium">{r.column}</strong>: {FLAG_CHECKS.find((c) => c.value === r.check)!.label}
+                <strong className="font-medium">{r.column}</strong>: {describe(r)}
               </span>
               <Button variant="ghost" size="icon" aria-label={`Remove check ${r.column} ${r.check}`} onClick={() => set({ flagRules: form.flagRules.filter((_, j) => j !== i) })}>
                 <X />

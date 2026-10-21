@@ -2,9 +2,10 @@
  * Pure helpers that turn the cleaning form state into an API operation.
  * Kept free of React so they are easy to unit test.
  */
-import type { ColumnProfile, FlagRule, Operation, OperationType } from "@/api/types";
+import type { ColumnProfile, FlagRule, Operation, OperationType, SortKey } from "@/api/types";
 
-export type CleanChoice = OperationType | "outliers";
+/** "mark_missing" is a shortcut that builds a map_values operation (listed words → empty). */
+export type CleanChoice = OperationType | "outliers" | "mark_missing";
 
 export type FormState = {
   keep: "first" | "last";
@@ -64,6 +65,14 @@ export type FormState = {
   ndMatch: "normalized" | "similar";
   ndAction: "flag" | "remove";
   ndColumnName: string;
+  /** organize_columns: every column in the order it should have (current names) */
+  orgOrder: string[];
+  orgRenames: Record<string, string>;
+  orgDrop: string[];
+  sortKeys: SortKey[];
+  sortMissing: "last" | "first";
+  mmColumns: string[];
+  mmWords: string;
 };
 
 export const DEFAULT_FORM: FormState = {
@@ -124,7 +133,19 @@ export const DEFAULT_FORM: FormState = {
   ndMatch: "normalized",
   ndAction: "flag",
   ndColumnName: "duplicate_group",
+  orgOrder: [],
+  orgRenames: {},
+  orgDrop: [],
+  sortKeys: [{ column: "", direction: "asc" }],
+  sortMissing: "last",
+  mmColumns: [],
+  mmWords: "Unknown, unk, TBD, not known, ---",
 };
+
+/** Words typed in the "mark as missing" box, split on commas or new lines. */
+export function missingWords(text: string): string[] {
+  return [...new Set(text.split(/[,\n]/).map((w) => w.trim()).filter(Boolean))];
+}
 
 /** Rows of the mapping table that actually change something. */
 export function mappingRows(edits: Record<string, string>): { value: string; to: string }[] {
@@ -148,6 +169,7 @@ export const FLAG_CHECKS: { value: FlagRule["check"]; label: string }[] = [
   { value: "not_number", label: "Not a number" },
   { value: "not_date", label: "Not a date" },
   { value: "duplicate_value", label: "Repeated value (e.g. same email twice)" },
+  { value: "out_of_range", label: "Outside an allowed range (e.g. age 0–100)" },
 ];
 
 export const isNumeric = (c: Pick<ColumnProfile, "type">) => c.type === "integer" || c.type === "decimal";
@@ -165,6 +187,7 @@ export function columnRestriction(choice: CleanChoice, form: FormState, col: Col
     case "standardize_country":
     case "clean_email":
     case "map_values":
+    case "mark_missing":
       return col.is_text ? null : "Not text";
     default:
       return null;
@@ -282,7 +305,11 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
         operation: {
           type: "flag_rows",
           rules: f.flagRules.map((r) =>
-            r.check === "invalid_phone" ? { column: r.column, check: r.check, region, region_column } : { column: r.column, check: r.check },
+            r.check === "invalid_phone"
+              ? { column: r.column, check: r.check, region, region_column }
+              : r.check === "out_of_range"
+                ? { column: r.column, check: r.check, min: r.min?.trim() || null, max: r.max?.trim() || null }
+                : { column: r.column, check: r.check },
           ),
           column_name: f.flagColumnName.trim(),
         },
@@ -326,6 +353,32 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
       return f.countryColumns.length
         ? { operation: { type: "standardize_country", columns: f.countryColumns, output: f.countryOutput } }
         : { error: "Select at least one column." };
+    case "organize_columns": {
+      const drop = f.orgDrop;
+      const rename = f.orgOrder
+        .filter((c) => !drop.includes(c))
+        .map((c) => ({ column: c, to: (f.orgRenames[c] ?? "").trim() }))
+        .filter((r) => r.to && r.to !== r.column);
+      const finalNames = f.orgOrder.filter((c) => !drop.includes(c)).map((c) => (f.orgRenames[c] ?? "").trim() || c);
+      if (f.orgOrder.length && drop.length === f.orgOrder.length) return { error: "Keep at least one column." };
+      const dup = finalNames.find((n, i) => finalNames.indexOf(n) !== i);
+      if (dup) return { error: `Two columns would be called “${dup}”. Choose different names.` };
+      return { operation: { type: "organize_columns", rename, drop, order: f.orgOrder.filter((c) => !drop.includes(c)) } };
+    }
+    case "sort_rows": {
+      const by = f.sortKeys.filter((k) => k.column);
+      if (!by.length) return { error: "Choose a column to sort by." };
+      if (new Set(by.map((k) => k.column)).size !== by.length) return { error: "Use each column only once." };
+      return { operation: { type: "sort_rows", by, missing: f.sortMissing } };
+    }
+    case "mark_missing": {
+      if (!f.mmColumns.length) return { error: "Select at least one column." };
+      const words = missingWords(f.mmWords);
+      if (!words.length) return { error: "Type the words that mean “no value”, separated by commas." };
+      return {
+        operation: { type: "map_values", columns: f.mmColumns, mappings: words.map((w) => ({ value: w, to: "" })), ignore_case: true },
+      };
+    }
     case "outliers":
       return { error: "Outlier review does not change data." };
   }
@@ -395,6 +448,9 @@ export const CHOICES: { id: CleanChoice; label: string; description: string }[] 
   { id: "trim_whitespace", label: "Trim whitespace", description: "Remove leading and trailing spaces." },
   { id: "standardize_text", label: "Standardize text case", description: "lowercase, UPPERCASE or Title Case." },
   { id: "clean_column_names", label: "Clean column names", description: "Trim, underscores, unique names." },
+  { id: "organize_columns", label: "Organize columns", description: "Rename, remove and reorder columns." },
+  { id: "sort_rows", label: "Sort rows", description: "Numbers, dates or text; the download keeps the order." },
+  { id: "mark_missing", label: "Mark words as missing", description: "“Unknown”, “TBD” … become empty cells." },
   { id: "convert_type", label: "Convert data type", description: "Integer, decimal, text or date." },
   { id: "remove_empty", label: "Remove empty rows/columns", description: "Drop rows or columns with no values." },
   { id: "find_replace", label: "Find and replace", description: "Replace values in selected columns." },
@@ -425,9 +481,9 @@ export type CategoryId =
 /** Operations grouped the way users think about cleaning. */
 export const CATEGORIES: { id: CategoryId; label: string; description: string; choices: CleanChoice[] }[] = [
   { id: "duplicates", label: "Duplicates", description: "Exact and near-duplicates", choices: ["remove_duplicates", "near_duplicates"] },
-  { id: "missing", label: "Missing values", description: "Fill or remove empty cells", choices: ["missing_values"] },
+  { id: "missing", label: "Missing values", description: "Fill, remove or mark empty cells", choices: ["missing_values", "mark_missing"] },
   { id: "text", label: "Text cleaning", description: "Spaces and capitalisation", choices: ["trim_whitespace", "standardize_text"] },
-  { id: "columns", label: "Column names", description: "Tidy and de-duplicate headers", choices: ["clean_column_names"] },
+  { id: "columns", label: "Columns & sorting", description: "Rename, remove, reorder, sort", choices: ["organize_columns", "sort_rows", "clean_column_names"] },
   { id: "types", label: "Data types", description: "Numbers, dates, currencies", choices: ["convert_type", "clean_numbers"] },
   { id: "outliers", label: "Outliers", description: "Review unusual numbers", choices: ["outliers"] },
   { id: "empty", label: "Empty rows & columns", description: "Drop fully empty rows or columns", choices: ["remove_empty"] },

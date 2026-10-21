@@ -23,6 +23,7 @@ export function ExportPanel() {
   const [bom, setBom] = useState(false);
   const [protectFormulas, setProtectFormulas] = useState(false);
   const [includeReport, setIncludeReport] = useState(true);
+  const [highlight, setHighlight] = useState(false);
   const [format, setFormat] = useState<ExportFormat>("csv");
   const [busy, setBusy] = useState(false);
   const [downloadError, setDownloadError] = useState<ApiError | null>(null);
@@ -42,7 +43,7 @@ export function ExportPanel() {
     setBusy(true);
     setDownloadError(null);
     try {
-      const saved = await api.exportFile(name, format, bom, protectFormulas, includeReport && history.length > 0);
+      const saved = await api.exportFile(name, format, bom, protectFormulas, includeReport && history.length > 0, highlight);
       toast({ tone: "success", title: "Download ready", description: `${saved} was generated from the current working data.` });
     } catch (err) {
       const e = toApiError(err);
@@ -132,6 +133,15 @@ export function ExportPanel() {
               onChange={(e) => setIncludeReport(e.target.checked)}
               label="Add a “Cleaning report” sheet"
               description="A second sheet that lists every change and what is left for review, ready for your client."
+            />
+          )}
+          {format === "xlsx" && (
+            <Checkbox
+              id="highlight"
+              checked={highlight}
+              onChange={(e) => setHighlight(e.target.checked)}
+              label="Colour the cells that still need a look"
+              description="Empty cells grey, “N/A”-style text, extra spaces and invalid emails yellow, duplicate rows orange, with a “Colour key” sheet. Like conditional formatting, but done for you."
             />
           )}
           {format === "csv" && (
