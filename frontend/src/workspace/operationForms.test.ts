@@ -1,5 +1,5 @@
 import type { ColumnProfile } from "@/api/types";
-import { DEFAULT_FORM, buildOperation, columnRestriction, formForIssue, mappingRows, missingWords, suggestJoinKey } from "./operationForms";
+import { DEFAULT_FORM, buildOperation, columnRestriction, formForIssue, mappingRows, missingWords, suggestJoinKey, parseRate } from "./operationForms";
 
 const col = (name: string, type: ColumnProfile["type"], is_text = true): ColumnProfile => ({
   name,
@@ -296,5 +296,46 @@ describe("combine files", () => {
     expect(suggestJoinKey(["name", "Email Address"], ["Name", "email_address"])).toEqual({ left: "Email Address", right: "email_address" });
     expect(suggestJoinKey(["name", "city"], ["Name"])).toEqual({ left: "name", right: "Name" });
     expect(suggestJoinKey(["a"], ["b"])).toBeNull();
+  });
+});
+
+describe("currency conversion", () => {
+  const f = { ...DEFAULT_FORM, numColumns: ["spent"], numDecimal: "." as const };
+
+  it("sends nothing extra when not converting", () => {
+    expect(buildOperation("clean_numbers", f).operation).toEqual({ type: "clean_numbers", columns: ["spent"], decimal: ".", on_error: "abort" });
+  });
+
+  it("sends the target, the typed rates and the country column", () => {
+    const op = buildOperation("clean_numbers", {
+      ...f,
+      numConvert: true,
+      numTarget: "USD",
+      numCountryColumn: "country",
+      numRates: { PKR: "0,0036", GBP: " 1.27 ", USD: "", EUR: "" },
+    }).operation;
+    expect(op).toEqual({
+      type: "clean_numbers",
+      columns: ["spent"],
+      decimal: ".",
+      on_error: "abort",
+      convert_to: "USD",
+      rates: [{ currency: "PKR", rate: 0.0036 }, { currency: "GBP", rate: 1.27 }],
+      country_column: "country",
+      default_currency: null,
+    });
+  });
+
+  it("rejects a rate that is not a positive number", () => {
+    expect(buildOperation("clean_numbers", { ...f, numConvert: true, numRates: { PKR: "abc" } }).error).toMatch(/PKR/);
+    expect(buildOperation("clean_numbers", { ...f, numConvert: true, numRates: { PKR: "0" } }).error).toMatch(/PKR/);
+    expect(buildOperation("clean_numbers", { ...f, numConvert: true, numCountryColumn: "spent" }).error).toMatch(/country column/);
+  });
+
+  it("reads typed rates", () => {
+    expect(parseRate("280")).toBe(280);
+    expect(parseRate("1,27")).toBe(1.27);
+    expect(parseRate("-1")).toBeNull();
+    expect(parseRate("1e3")).toBeNull();
   });
 });

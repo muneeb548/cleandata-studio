@@ -28,6 +28,7 @@ import {
 import { ApiError, SESSION_GONE, api } from "@/api/client";
 import { AiSuggestMappings } from "./Ai";
 import { CombineFilesForm } from "./CombineFiles";
+import { CurrencyConvert } from "./CurrencyConvert";
 import type { ColumnProfile, ColumnValues, FlagRule, Operation, OperationPreview, OutlierReport, Profile } from "@/api/types";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -541,6 +542,7 @@ function OperationForm({ choice, form, set, profile }: { choice: CleanChoice; fo
             <RadioCard name="num-error" value="set_missing" checked={form.numOnError === "set_missing"} onChange={() => set({ numOnError: "set_missing" })} label="Set them to missing (reported)" description="Converts everything else." />
           </div>
           <ColumnPicker id="num-cols" columns={cols} selected={form.numColumns} onChange={(numColumns) => set({ numColumns })} />
+          <CurrencyConvert form={form} set={set} cols={cols} />
         </div>
       );
 
@@ -1150,6 +1152,7 @@ export function CleanPanel() {
       countryColumns: keep(f.countryColumns),
       emailColumns: keep(f.emailColumns),
       numColumns: keep(f.numColumns),
+      numCountryColumn: names.has(f.numCountryColumn) ? f.numCountryColumn : "",
       mapColumn: names.has(f.mapColumn) ? f.mapColumn : "",
       ndColumns: keep(f.ndColumns),
       phoneRegionColumn: names.has(f.phoneRegionColumn) ? f.phoneRegionColumn : "",

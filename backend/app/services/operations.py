@@ -361,6 +361,27 @@ def clean_column_names(df: pd.DataFrame, op: CleanColumnNames) -> OpResult:
     return OpResult(out, f"Renamed {_plural(len(renamed), 'column')}.", details={"mapping": mapping, "renamed": len(renamed)})
 
 
+# Year first (2023-05-01, 2023/05/01, 2023.05.01, optionally with a time) is never ambiguous:
+# it is always year-month-day, whatever "day comes first" says for dates like 05/01/2023.
+_YEAR_FIRST = re.compile(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:$|[ T])")
+
+
+def _parse_mixed_dates(text: pd.Series, dayfirst: bool) -> pd.Series:
+    """Parse dates written in different ways. With dayfirst, pandas would also swap day and
+    month in year-first dates (2023-05-01 -> 5 January), so those are parsed on their own."""
+    if not dayfirst:
+        return pd.to_datetime(text, errors="coerce", format="mixed")
+    year_first = text.str.match(_YEAR_FIRST).fillna(False).to_numpy(dtype=bool)
+    parts = []
+    if year_first.any():
+        parts.append(pd.to_datetime(text[year_first], errors="coerce", format="mixed", dayfirst=False))
+    if (~year_first).any():
+        parts.append(pd.to_datetime(text[~year_first], errors="coerce", format="mixed", dayfirst=True))
+    if not parts:
+        return pd.to_datetime(text, errors="coerce", format="mixed")
+    return pd.concat(parts).reindex(text.index)
+
+
 def convert_type(df: pd.DataFrame, op: ConvertType) -> OpResult:
     cols = _require_columns(df, op.columns)
     out = df.copy(deep=False)
@@ -386,7 +407,7 @@ def convert_type(df: pd.DataFrame, op: ConvertType) -> OpResult:
                 if op.date_format:
                     parsed = pd.to_datetime(text, errors="coerce", format=op.date_format)
                 else:
-                    parsed = pd.to_datetime(text, errors="coerce", format="mixed", dayfirst=op.dayfirst)
+                    parsed = _parse_mixed_dates(text, op.dayfirst)
             except (ValueError, TypeError) as exc:
                 raise AppError("datetime_error", f'Dates in "{c}" could not be parsed consistently.',
                                "Try specifying a date format such as %Y-%m-%d or %d/%m/%Y.") from exc
@@ -904,12 +925,53 @@ def parse_amount(raw: str, decimal: str = "auto") -> tuple[float | None, str | N
     return (-number if negative else number), currency, ambiguous
 
 
+def _row_currencies(df: pd.DataFrame, column: str | None) -> list[str | None] | None:
+    """Each row's currency from its country (None when the country is unknown)."""
+    if not column:
+        return None
+    from app.services.countries import country_code
+    from app.services.currencies import COUNTRY_CURRENCY
+
+    cache: dict[str, str | None] = {}
+    out: list[str | None] = []
+    for value in _canon(df[column]).tolist():
+        if not isinstance(value, str) or not value.strip():
+            out.append(None)
+            continue
+        if value not in cache:
+            code = country_code(value)
+            cache[value] = COUNTRY_CURRENCY.get(code) if code else None
+        out.append(cache[value])
+    return out
+
+
+def _fmt_rate(rate: float) -> str:
+    return f"{rate:,.6f}".rstrip("0").rstrip(".") if rate < 1 else f"{rate:,.4f}".rstrip("0").rstrip(".")
+
+
 def clean_numbers(df: pd.DataFrame, op: CleanNumbers) -> OpResult:
+    from app.services.currencies import resolve
+
     cols = _require_columns(df, op.columns)
+    if op.country_column:
+        _require_columns(df, [op.country_column])
+        if op.country_column in cols:
+            raise AppError("country_column_selected", "The country column cannot also be an amount column.",
+                           "Untick it in the list of columns.")
+    row_currency = _row_currencies(df, op.country_column)
+    converting = op.convert_to is not None
+    rates = {r.currency: r.rate for r in op.rates}
+    if converting:
+        rates[op.convert_to] = 1.0
     out = df.copy(deep=False)
     invalid_counts: dict[str, int] = {}
     invalid_samples: list[dict] = []
     currencies: dict[str, set[str]] = {}
+    currency_counts: dict[str, int] = {}
+    converted_counts: dict[str, int] = {}
+    no_currency = 0
+    no_currency_samples: list[dict] = []
+    missing_rates: set[str] = set()
     ambiguous_total = 0
     from_words: set[str] = set()
     words_total = 0
@@ -919,7 +981,7 @@ def clean_numbers(df: pd.DataFrame, op: CleanNumbers) -> OpResult:
         cache: dict[str, tuple[float | None, str | None, bool]] = {}
         numbers: list[float | None] = []
         bad_flags: list[bool] = []
-        for value in text.tolist():
+        for i, value in enumerate(text.tolist()):
             if not isinstance(value, str) or value == "":
                 numbers.append(None)
                 bad_flags.append(False)
@@ -932,14 +994,35 @@ def clean_numbers(df: pd.DataFrame, op: CleanNumbers) -> OpResult:
                         parsed = (words, None, False)
                         from_words.add(value)
                 cache[value] = parsed
-            number, currency, ambiguous = cache[value]
+            number, mark, ambiguous = cache[value]
             if value in from_words:
                 words_total += 1
+            if mark:
+                currencies.setdefault(c, set()).add(mark)
+            ambiguous_total += int(ambiguous)
+            if number is not None and (converting or row_currency is not None or op.default_currency):
+                code = resolve(mark, row_currency[i] if row_currency else None, op.default_currency)
+                currency_counts[code or "unknown"] = currency_counts.get(code or "unknown", 0) + 1
+                if converting:
+                    if code is None:
+                        no_currency += 1
+                        if len(no_currency_samples) < 20:
+                            no_currency_samples.append({"row": int(s.index[i]) + 1, "column": c, "value": value})
+                        number = None
+                    elif code not in rates:
+                        missing_rates.add(code)
+                        number = None
+                    else:
+                        converted_counts[code] = converted_counts.get(code, 0) + 1
+                        number = round(number * rates[code], 2)
+                        bad_flags.append(False)
+                        numbers.append(number)
+                        continue
+                    numbers.append(None)
+                    bad_flags.append(False)
+                    continue
             numbers.append(number)
             bad_flags.append(number is None)
-            if currency:
-                currencies.setdefault(c, set()).add(currency)
-            ambiguous_total += int(ambiguous)
         bad = pd.Series(bad_flags, index=s.index, dtype=bool)
         if bad.any():
             invalid_counts[c] = int(bad.sum())
@@ -948,18 +1031,45 @@ def clean_numbers(df: pd.DataFrame, op: CleanNumbers) -> OpResult:
         out[c] = pd.Series(numbers, index=s.index, dtype="Float64")
     total_bad = sum(invalid_counts.values())
     details = {"invalid_counts": invalid_counts, "invalid_samples": invalid_samples, "target": "float",
-               "currencies": {c: sorted(v) for c, v in currencies.items()}}
+               "currencies": {c: sorted(v) for c, v in currencies.items()},
+               "currency_counts": dict(sorted(currency_counts.items(), key=lambda kv: -kv[1]))}
     if total_bad and op.on_error == "abort":
         return OpResult(df.copy(deep=False), f"{_plural(total_bad, 'value')} cannot be read as a number.", details=details,
                         blocked=f"{_plural(total_bad, 'value')} cannot be read as a number. Fix them, or choose to "
                                 "set values that are not numbers to missing.")
+    if converting:
+        details["converted_counts"] = converted_counts
+        details["no_currency_samples"] = no_currency_samples
+        if missing_rates:
+            need = ", ".join(sorted(missing_rates))
+            return OpResult(df.copy(deep=False), f"Rates are needed for {need}.", details=details,
+                            blocked=f"Type the exchange rate for {need} (1 {sorted(missing_rates)[0]} = how many "
+                                    f"{op.convert_to}). Nothing is converted without a rate you chose.")
+        if no_currency and op.on_error == "abort":
+            return OpResult(df.copy(deep=False), f"{_plural(no_currency, 'amount')} have no currency.",
+                            details=details,
+                            blocked=f"{_plural(no_currency, 'amount')} have no currency mark and their currency cannot "
+                                    "be known. Choose a country column or a default currency, or choose to set "
+                                    "them to missing.")
     changed, _ = count_changed_cells(df, out, columns=cols)
     summary = f"Converted {_plural(len(cols), 'column')} to numbers."
     warnings = []
-    for c, marks in currencies.items():
-        if len(marks) > 1:
-            warnings.append(f'"{c}" mixes currencies ({", ".join(sorted(marks))}). The numbers were kept as they are, '
-                            "not converted between currencies.")
+    if converting:
+        total = sum(converted_counts.values())
+        summary = f"Converted {_plural(total, 'amount')} to {op.convert_to}."
+        used = [f"{_plural(n, code + ' amount')} at 1 {code} = {_fmt_rate(rates[code])} {op.convert_to}"
+                for code, n in sorted(converted_counts.items(), key=lambda kv: -kv[1]) if code != op.convert_to]
+        if used:
+            warnings.append("Rates you typed: " + "; ".join(used) + ". Results are rounded to 2 decimals. "
+                            "Mention the rates and their date to your client.")
+        if no_currency:
+            warnings.append(f"{_plural(no_currency, 'amount')} had no currency and became missing.")
+    else:
+        for c, marks in currencies.items():
+            if len(marks) > 1:
+                warnings.append(f'"{c}" mixes currencies ({", ".join(sorted(marks))}). The numbers were kept as '
+                                "they are, not converted between currencies. To convert, tick \"Convert all to one "
+                                "currency\".")
     if words_total:
         examples = ", ".join(f'"{w}"' for w in sorted(from_words)[:3])
         warnings.append(f"{_plural(words_total, 'value')} written in words ({examples}) became numbers. Check them.")

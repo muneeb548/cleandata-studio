@@ -70,6 +70,8 @@ export interface SessionInfo {
   expires_in_seconds: number;
   /** Other files added for Combine files (older servers may leave this out). */
   files?: AttachedFile[];
+  /** True when this dataset is saved on the server's disk. */
+  saved?: boolean;
 }
 
 export interface LogEvent {
@@ -317,7 +319,16 @@ export type Operation =
     }
   | { type: "standardize_country"; columns: string[]; output: "name" | "code" }
   | { type: "clean_email"; columns: string[]; lowercase: boolean; fix_domains: boolean; on_invalid: "keep" | "set_missing" }
-  | { type: "clean_numbers"; columns: string[]; decimal: "auto" | "." | ","; on_error: "abort" | "set_missing" }
+  | {
+      type: "clean_numbers";
+      columns: string[];
+      decimal: "auto" | "." | ",";
+      on_error: "abort" | "set_missing";
+      convert_to?: string | null;
+      rates?: { currency: string; rate: number }[];
+      country_column?: string | null;
+      default_currency?: string | null;
+    }
   | { type: "map_values"; columns: string[]; mappings: { value: string; to: string }[]; ignore_case: boolean }
   | { type: "near_duplicates"; columns: string[]; match: "normalized" | "similar"; action: "flag" | "remove"; column_name: string }
   | { type: "flag_rows"; rules: FlagRule[]; column_name: string }
@@ -420,7 +431,10 @@ export interface OutlierReport {
 
 export interface AppConfig {
   max_upload_mb: number;
+  /** 0 = sessions never expire. */
   session_ttl_minutes: number;
+  /** Datasets are kept on the server's disk and reopen after a restart (older servers leave it out). */
+  save_sessions?: boolean;
   max_page_size: number;
   formats: ImportFormat[];
   export_formats: ExportFormat[];

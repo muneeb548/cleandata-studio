@@ -33,5 +33,15 @@ export function useServerLimits(): AppConfig | null {
 export function fillLimits(text: string, config: Pick<AppConfig, "max_upload_mb" | "session_ttl_minutes"> | null): string {
   return text
     .replace(/\{limit\}/g, config ? `${config.max_upload_mb} MB` : "the server's size limit")
-    .replace(/\{ttl\}/g, config ? `${config.session_ttl_minutes} minutes` : "a period");
+    .replace(/\{ttl\}/g, config && config.session_ttl_minutes > 0 ? `${config.session_ttl_minutes} minutes` : "a period");
+}
+
+/** One sentence on how long the dataset is kept, for the workspace. */
+export function keepText(config: Pick<AppConfig, "session_ttl_minutes" | "save_sessions"> | null): string {
+  const ttl = config?.session_ttl_minutes ?? 30;
+  if (config?.save_sessions)
+    return ttl > 0
+      ? `Saved on this computer; deleted after ${ttl} min of inactivity.`
+      : "Saved on this computer until you delete it, also after a restart.";
+  return ttl > 0 ? `Deleted after ${ttl} min of inactivity.` : "Kept until you delete it or the server restarts.";
 }

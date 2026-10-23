@@ -216,6 +216,13 @@ class CleanEmail(_Op):
     on_invalid: Literal["keep", "set_missing"] = "keep"
 
 
+class CurrencyRate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
+    rate: float = Field(gt=0, le=1_000_000_000, description="How much one unit is worth in the target currency.")
+
+
 class CleanNumbers(_Op):
     """Turn amounts written as text ("$1,250.00", "Rs 1,250", "1.234,56 €", "(500)") into real numbers."""
 
@@ -227,6 +234,28 @@ class CleanNumbers(_Op):
     on_error: Literal["abort", "set_missing"] = Field(
         "abort", description="abort: refuse to apply if a value is not a number; set_missing: convert and report them."
     )
+    convert_to: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] | None = Field(
+        None, description="Convert every amount to this currency (ISO code such as USD). Needs a rate for each "
+                          "other currency found."
+    )
+    rates: Annotated[list[CurrencyRate], Field(max_length=60)] = Field(
+        default_factory=list, description="Exchange rates typed by the user: 1 <currency> = <rate> <convert_to>."
+    )
+    country_column: ColumnName | None = Field(
+        None, description="Column with each row's country; decides the currency of plain numbers and of marks "
+                          "shared by several currencies ($, Rs, ¥)."
+    )
+    default_currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] | None = Field(
+        None, description="Currency of amounts that have no mark (and no country)."
+    )
+
+    @field_validator("rates")
+    @classmethod
+    def _unique_rates(cls, value: list["CurrencyRate"]) -> list["CurrencyRate"]:
+        codes = [r.currency for r in value]
+        if len(set(codes)) != len(codes):
+            raise ValueError("each currency can have only one rate")
+        return value
 
 
 class ValueMapping(BaseModel):

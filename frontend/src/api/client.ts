@@ -104,12 +104,27 @@ async function send(url: string, init: RequestInit, timeoutMs = TIMEOUT_MS): Pro
   }
 }
 
-// The session id lives in sessionStorage: it survives a page refresh but is
-// scoped to this browser tab and cleared when the tab is closed.
+// The session id lives in sessionStorage: it survives a page refresh but is scoped to
+// this browser tab and cleared when the tab is closed. When the server keeps datasets on
+// disk (SAVE_SESSIONS, for your own computer), it is also kept in localStorage, so the
+// same dataset opens again in a new tab or after restarting the browser.
+let keepAcrossVisits = false;
+
+export function setKeepAcrossVisits(on: boolean) {
+  keepAcrossVisits = on;
+  const id = getSessionId();
+  try {
+    if (on && id) window.localStorage.setItem(SESSION_KEY, id);
+    if (!on) window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* storage unavailable: the session still works in this tab */
+  }
+}
+
 export const sessionStore = {
   get(): string | null {
     try {
-      return window.sessionStorage.getItem(SESSION_KEY);
+      return window.sessionStorage.getItem(SESSION_KEY) ?? window.localStorage.getItem(SESSION_KEY);
     } catch {
       return null;
     }
@@ -117,6 +132,7 @@ export const sessionStore = {
   set(id: string) {
     try {
       window.sessionStorage.setItem(SESSION_KEY, id);
+      if (keepAcrossVisits) window.localStorage.setItem(SESSION_KEY, id);
     } catch {
       /* storage unavailable (private mode): the session still works until refresh */
     }
@@ -124,6 +140,7 @@ export const sessionStore = {
   clear() {
     try {
       window.sessionStorage.removeItem(SESSION_KEY);
+      window.localStorage.removeItem(SESSION_KEY);
     } catch {
       /* ignore */
     }

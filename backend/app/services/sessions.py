@@ -73,6 +73,9 @@ class AttachedFile:
     warnings: list[str]
     added_at: float
     bytes: int = 0
+    # Removed by the user but still needed to rebuild an applied Combine files step
+    # (saved sessions replay their steps). Hidden from the file list.
+    removed: bool = False
 
     def public(self) -> dict:
         return {
@@ -133,6 +136,16 @@ class Session:
     ai_calls: int = 0
     # Other files added to combine with this one (append rows / join columns), by id.
     files: dict[str, AttachedFile] = field(default_factory=dict)
+    # Writes this session to disk after every change when SAVE_SESSIONS is on (see persistence.py).
+    saver: Any = field(default=None, repr=False)
+
+    def save(self) -> None:
+        if self.saver is not None:
+            self.saver(self)
+
+    @property
+    def visible_files(self) -> list["AttachedFile"]:
+        return [f for f in self.files.values() if not f.removed]
 
     @property
     def memory_bytes(self) -> int:
@@ -184,6 +197,9 @@ class Session:
         """
         self.history.append(entry)
         self.log.append(LogEvent("applied", entry.applied_at, entry.id, entry.type, entry.label, entry.summary))
+        self.prune(max_snapshots, max_bytes)
+
+    def prune(self, max_snapshots: int, max_bytes: int | None = None) -> None:
         keep_always = 2
         while True:
             stored = [h for h in self.history if h.df is not None]
@@ -213,7 +229,9 @@ class Session:
 
 
 class SessionStore:
-    def __init__(self, ttl_seconds: int, max_sessions: int, max_total_bytes: int = 0, protect_seconds: int = 0):
+    def __init__(self, ttl_seconds: int, max_sessions: int, max_total_bytes: int = 0, protect_seconds: int = 0,
+                 saved_dir: str | None = None, max_snapshots: int = 20, max_history_bytes: int | None = None):
+        # ttl_seconds <= 0: sessions never expire (useful with saved sessions on your own computer).
         self.ttl = ttl_seconds
         self.max_sessions = max_sessions
         # Server-wide memory budget for all sessions (0 = none) and how long after its
@@ -222,10 +240,22 @@ class SessionStore:
         self.protect_seconds = protect_seconds
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
+        # Saved sessions (SAVE_SESSIONS): kept on disk, reloaded after a restart.
+        self.disk = None
+        if saved_dir:
+            from app.services.persistence import SessionDisk
+
+            self.disk = SessionDisk(saved_dir)
+        self.max_snapshots = max_snapshots
+        self.max_history_bytes = max_history_bytes
+        self._disk_touched: dict[str, float] = {}
 
     @staticmethod
     def new_id() -> str:
         return secrets.token_urlsafe(32)
+
+    def _expired(self, last_access: float, now: float | None = None) -> bool:
+        return self.ttl > 0 and (now or time.time()) - last_access > self.ttl
 
     def create(self, **kwargs) -> tuple[Session, str]:
         """Create a session and return it with its token. The secret part of the
@@ -238,6 +268,9 @@ class SessionStore:
         with self._lock:
             self._make_room(session.original_bytes)
             self._sessions[session.id] = session
+        if self.disk is not None:
+            session.saver = self.disk.save
+            session.save()
         return session, f"{session.id}.{secret}"
 
     def total_bytes(self) -> int:
@@ -254,7 +287,9 @@ class SessionStore:
     def _make_room(self, needed: int, exclude: str | None = None, count_new: bool = True) -> None:
         """Remove least recently used sessions until the new one fits. Sessions used in the
         last `protect_seconds` are never removed; if nothing can be removed, the new upload
-        is refused instead of taking someone's data away mid-task. Caller holds the lock."""
+        is refused instead of taking someone's data away mid-task. With saved sessions a
+        removed session only leaves memory: it stays on disk and is reloaded when opened.
+        Caller holds the lock."""
         if self.max_total_bytes and needed > self.max_total_bytes:
             raise AppError("file_too_large_for_server",
                            "This file needs more memory than this server allows for one dataset.",
@@ -282,14 +317,42 @@ class SessionStore:
                         "For privacy, data is deleted after a period of inactivity. Upload the file again.",
                         status=404)
 
-    def _resolve(self, token: str | None) -> Session | None:
-        """Validate the token format and secret; return the session or None. Caller holds the lock."""
+    @staticmethod
+    def _split(token: str | None) -> tuple[str, str] | None:
         if not token or not TOKEN_RE.match(token):
             return None
         session_id, secret = token.split(".", 1)
-        session = self._sessions.get(session_id)
-        if session is None or not hmac.compare_digest(session.secret_hash, _hash(secret)):
+        return session_id, secret
+
+    def _resolve(self, token: str | None) -> Session | None:
+        """Validate the token format and secret; return the session or None. Caller holds the lock."""
+        parts = self._split(token)
+        if parts is None:
             return None
+        session = self._sessions.get(parts[0])
+        if session is None or not hmac.compare_digest(session.secret_hash, _hash(parts[1])):
+            return None
+        return session
+
+    def _load(self, token: str | None) -> Session | None:
+        """Reopen a saved session from disk (after a restart, or after it left memory)."""
+        parts = self._split(token) if self.disk is not None else None
+        if parts is None or not self.disk.exists(parts[0]):
+            return None
+        last = self.disk.last_access(parts[0])
+        if last is not None and self._expired(last):
+            self.disk.delete(parts[0])
+            return None
+        try:
+            session = self.disk.load(parts[0], self.max_snapshots, self.max_history_bytes)
+        except Exception as exc:  # noqa: BLE001 - a damaged folder must not break the app
+            import logging
+
+            logging.getLogger("cleandata").warning("could not reopen a saved session: %s", type(exc).__name__)
+            return None
+        if not hmac.compare_digest(session.secret_hash, _hash(parts[1])):
+            return None
+        session.saver = self.disk.save
         return session
 
     def get(self, token: str | None) -> Session:
@@ -297,29 +360,65 @@ class SessionStore:
             raise AppError("no_session", "No active dataset.", "Upload a file to start.", status=401)
         with self._lock:
             session = self._resolve(token)
-            if session is not None and time.time() - session.last_access > self.ttl:
+            if session is not None and self._expired(session.last_access):
                 del self._sessions[session.id]
-                session = None
-            if session is None:
+                if self.disk is not None:
+                    self.disk.delete(session.id)
                 raise self._not_found()
-            session.last_access = time.time()
-            return session
+        if session is None:
+            loaded = self._load(token)  # outside the lock: replaying steps can take a moment
+            if loaded is None:
+                raise self._not_found()
+            with self._lock:
+                session = self._resolve(token)
+                if session is None:
+                    self._make_room(loaded.memory_bytes)
+                    self._sessions[loaded.id] = loaded
+                    session = loaded
+        session.last_access = time.time()
+        if self.disk is not None and session.last_access - self._disk_touched.get(session.id, 0) > 60:
+            self._disk_touched[session.id] = session.last_access
+            self.disk.touch(session)
+        return session
 
     def delete(self, token: str | None) -> bool:
         with self._lock:
             session = self._resolve(token)
-            if session is None:
+            parts = self._split(token)
+            on_disk = (self.disk is not None and parts is not None and self.disk.exists(parts[0])
+                       and (session is not None or self._disk_secret_ok(parts)))
+            if session is None and not on_disk:
                 return False
-            del self._sessions[session.id]
+            if session is not None:
+                del self._sessions[session.id]
+            if on_disk:
+                self.disk.delete(parts[0])
             return True
 
+    def _disk_secret_ok(self, parts: tuple[str, str]) -> bool:
+        import json
+
+        try:
+            meta = json.loads((self.disk.root / parts[0] / "meta.json").read_text(encoding="utf-8"))
+            return hmac.compare_digest(bytes.fromhex(meta["secret_hash"]), _hash(parts[1]))
+        except (OSError, ValueError, KeyError):
+            return False
+
     def cleanup(self) -> int:
+        if self.ttl <= 0:
+            return 0
         now = time.time()
         with self._lock:
-            expired = [sid for sid, s in self._sessions.items() if now - s.last_access > self.ttl]
+            expired = [sid for sid, s in self._sessions.items() if self._expired(s.last_access, now)]
             for sid in expired:
                 del self._sessions[sid]
-        return len(expired)
+        if self.disk is not None:
+            for sid in set(self.disk.ids()) - set(self._sessions):
+                last = self.disk.last_access(sid)
+                if last is not None and self._expired(last, now):
+                    self.disk.delete(sid)
+                    expired.append(sid)
+        return len(set(expired))
 
     def __len__(self) -> int:
         return len(self._sessions)
@@ -334,4 +433,7 @@ store = SessionStore(
     max_sessions=settings.max_sessions,
     max_total_bytes=settings.max_total_memory_bytes,
     protect_seconds=settings.session_protect_seconds,
+    saved_dir=settings.sessions_dir if settings.save_sessions else None,
+    max_snapshots=settings.max_history_snapshots,
+    max_history_bytes=settings.max_history_bytes,
 )

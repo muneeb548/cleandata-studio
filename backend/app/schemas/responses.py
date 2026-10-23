@@ -37,7 +37,8 @@ class Health(_Model):
 
 class AppConfig(_Model):
     max_upload_mb: int
-    session_ttl_minutes: int
+    session_ttl_minutes: int = Field(description="0 = sessions never expire.")
+    save_sessions: bool = Field(False, description="Datasets are kept on disk and reopen after a restart.")
     max_page_size: int
     formats: list[str]
     export_formats: list[str]
@@ -109,6 +110,7 @@ class SessionInfo(_Model):
     expires_in_seconds: int
     files: list[AttachedFileInfo] = Field(default_factory=list,
                                           description="Other files added to this session for Combine files.")
+    saved: bool = Field(False, description="True when this dataset is kept on the server's disk (SAVE_SESSIONS).")
 
 
 class AttachResponse(_Model):

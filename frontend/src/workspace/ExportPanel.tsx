@@ -175,7 +175,9 @@ export function ExportPanel() {
           </Button>
           {downloaded && (
             <Alert tone="success" title="Finished with this file?" action={<DeleteDataButton />}>
-              Delete it from the server now instead of waiting {config?.session_ttl_minutes ?? 30} minutes.
+              {config && config.session_ttl_minutes > 0 && !config.save_sessions
+                ? `Delete it from the server now instead of waiting ${config.session_ttl_minutes} minutes.`
+                : "Delete it now if you no longer need it. It is kept until you do."}
             </Alert>
           )}
         </CardContent>

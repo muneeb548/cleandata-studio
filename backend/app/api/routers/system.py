@@ -20,6 +20,7 @@ def config() -> dict:
     return {
         "max_upload_mb": settings.max_upload_mb,
         "session_ttl_minutes": settings.session_ttl_minutes,
+        "save_sessions": settings.save_sessions,
         "max_page_size": settings.max_page_size,
         "formats": list(FORMATS),
         "export_formats": list(workspace.EXPORT_FORMATS),

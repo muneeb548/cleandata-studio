@@ -60,6 +60,11 @@ class Settings:
     max_upload_mb: int = field(default_factory=lambda: _int("MAX_UPLOAD_MB", 100))
     session_ttl_minutes: int = field(default_factory=lambda: _int("SESSION_TTL_MINUTES", 30))
     max_sessions: int = field(default_factory=lambda: _int("MAX_SESSIONS", 10))
+    # Keep datasets on this computer's disk so they survive closing the browser or restarting
+    # the server (for running the app on your own computer). Folder: SESSIONS_DIR.
+    save_sessions: bool = field(default_factory=lambda: _bool("SAVE_SESSIONS", False))
+    sessions_dir: str = field(default_factory=lambda: os.getenv("SESSIONS_DIR", "").strip()
+                              or str(Path(__file__).resolve().parents[2] / "saved_sessions"))
     max_history_snapshots: int = field(default_factory=lambda: _int("MAX_HISTORY_SNAPSHOTS", 20))
     # Memory budget for older undo steps. The original upload, the current data
     # and the previous step (needed for one undo) are always kept.
@@ -130,7 +135,14 @@ class Settings:
             issues.append(f"AI_PROVIDER must be off, ollama or anthropic, not '{self.ai_provider}'.")
         if self.ai_provider == "anthropic" and not self.anthropic_api_key:
             issues.append("AI_PROVIDER=anthropic needs ANTHROPIC_API_KEY.")
+        if self.session_ttl_minutes < 0:
+            issues.append("SESSION_TTL_MINUTES must be 0 (never expire) or more.")
         if self.is_production:
+            if self.save_sessions:
+                issues.append("SAVE_SESSIONS keeps visitors' data on the server's disk; it is meant for your own "
+                              "computer, not a public site.")
+            if self.session_ttl_minutes == 0:
+                issues.append("SESSION_TTL_MINUTES=0 keeps every visitor's data forever; set a limit on a public site.")
             if any(o == "*" for o in self.cors_origins):
                 issues.append("CORS_ORIGINS must list your site's origin(s); '*' is not allowed in production.")
             local = ("http://localhost", "http://127.0.0.1")  # harmless; allows a local production test
