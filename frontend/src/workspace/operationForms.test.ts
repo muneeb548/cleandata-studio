@@ -339,3 +339,14 @@ describe("currency conversion", () => {
     expect(parseRate("1e3")).toBeNull();
   });
 });
+
+describe("flag from a 'Needs your client' issue", () => {
+  it("adds the matching check for that column, once", () => {
+    const f = formForIssue("flag_rows", "email", "missing:email", [], DEFAULT_FORM);
+    expect(f.flagRules).toEqual([{ column: "email", check: "missing" }]);
+    const g = formForIssue("flag_rows", "email", "emails:email", [], f);
+    expect(g.flagRules).toEqual([{ column: "email", check: "missing" }, { column: "email", check: "invalid_email" }]);
+    expect(formForIssue("flag_rows", "email", "emails:email", [], g).flagRules).toHaveLength(2);
+    expect(formForIssue("flag_rows", "phone", "phones:phone", [], DEFAULT_FORM).flagRules).toEqual([{ column: "phone", check: "invalid_phone" }]);
+  });
+});

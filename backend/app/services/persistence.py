@@ -127,6 +127,7 @@ class SessionDisk:
                           for f in session.files.values()],
                 "history": [{k: v for k, v in h.__dict__.items() if k not in ("df", "bytes")} for h in session.history],
                 "log": [e.public() for e in session.log],
+                "reviewed": session.reviewed,
             }
             _write_atomic(folder / META, json.dumps(meta, default=str).encode("utf-8"))
         except OSError as exc:
@@ -180,6 +181,7 @@ class SessionDisk:
                 warnings=list(f.get("warnings") or []), added_at=f["added_at"], bytes=frame_bytes(df),
                 removed=bool(f.get("removed")))
         session.log = [LogEvent(**e) for e in meta.get("log", [])]
+        session.reviewed = dict(meta.get("reviewed") or {})
         self._replay(session, meta.get("history", []), TypeAdapter(Operation), HistoryEntry, LogEvent)
         session.prune(max_snapshots, max_bytes)
         return session

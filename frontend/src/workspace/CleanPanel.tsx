@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -1119,11 +1119,15 @@ export function CleanPanel() {
   // A preview is only valid for the exact options it was made with.
   const previewIsCurrent = !!preview && !!built.operation && JSON.stringify(preview.op) === JSON.stringify(built.operation);
 
-  // Prefill from a "Fix" button in the overview.
+  // Prefill from a "Fix" button in the overview, once per click. The profile reloads after
+  // every apply/undo; without this check the old request ran again and jumped back to it.
+  const handledRequest = useRef<number | null>(null);
   useEffect(() => {
-    if (!request || !profile) return;
+    if (!request || !profile || handledRequest.current === request.nonce) return;
+    handledRequest.current = request.nonce;
     setChoice(request.type);
-    setForm((f) => formForIssue(request.type, request.column, request.issueId, profile.columns, { ...DEFAULT_FORM, outlierColumn: f.outlierColumn }, request.example));
+    // Flag checks collect: each "Flag" click from the Overview adds its check to the ones already chosen.
+    setForm((f) => formForIssue(request.type, request.column, request.issueId, profile.columns, { ...DEFAULT_FORM, outlierColumn: f.outlierColumn, flagRules: request.type === "flag_rows" ? f.flagRules : DEFAULT_FORM.flagRules }, request.example));
     setPreview(null);
     setLastApplied(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps

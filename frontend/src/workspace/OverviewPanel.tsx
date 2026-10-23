@@ -10,7 +10,6 @@ import {
   Info,
   Rows3,
   SquareDashed,
-  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell as ChartCell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -29,6 +28,7 @@ import { QuickCleanButton } from "./QuickClean";
 import { ApplyRecipeButton, ResumeBanner } from "./Recipes";
 import { DatasetToggle, TypeBadge, typeLabel } from "./shared";
 import { useAsync } from "./useAsync";
+import { IssueList } from "./IssueList";
 import { useWorkspace } from "./WorkspaceContext";
 
 // Keep in sync with --color-chart-* in index.css (Recharts needs literal colours).
@@ -47,30 +47,6 @@ const SEVERITY: Record<Severity, { label: string; tone: "danger" | "warning" | "
   low: { label: "Low", tone: "neutral", icon: Info, color: "text-slate-500" },
   info: { label: "Review", tone: "primary", icon: Info, color: "text-primary" },
 };
-
-const ISSUE_PREVIEW = 6;
-
-function IssueRow({ issue }: { issue: Issue }) {
-  const { openOperation } = useWorkspace();
-  const sev = SEVERITY[issue.severity];
-  return (
-    <li className="flex items-start gap-3 px-5 py-3">
-      <sev.icon className={cn("mt-0.5 size-4 shrink-0", sev.color)} aria-hidden="true" />
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-2 text-small font-medium text-foreground">
-          <span className="break-words">{issue.title}</span>
-          <Badge tone={sev.tone}>{sev.label}</Badge>
-        </p>
-        <p className="mt-0.5 text-caption text-muted-foreground">{issue.description}</p>
-      </div>
-      {issue.suggested_operation && (
-        <Button variant="secondary" size="sm" className="shrink-0" onClick={() => openOperation(issue.suggested_operation!, issue.column, issue.id, issue.example)}>
-          <Wrench /> {issue.suggested_operation === "outliers" ? "Review" : "Fix"}
-        </Button>
-      )}
-    </li>
-  );
-}
 
 function QualitySummary({ profile, applied }: { profile: Profile; applied: number }) {
   const { setTab } = useWorkspace();
@@ -217,7 +193,6 @@ function ColumnProblems({ count, titles }: { count: number; titles: string[] }) 
 export function OverviewPanel() {
   const { version, info } = useWorkspace();
   const [dataset, setDataset] = useState<DatasetKind>("current");
-  const [showAll, setShowAll] = useState(false);
   const { data: profile, error, loading, reload } = useAsync(() => api.profile(dataset), [dataset, version], version);
   const applied = info?.history.length ?? 0;
 
@@ -264,7 +239,6 @@ export function OverviewPanel() {
     );
   }
   const s = profile.stats;
-  const issues = showAll ? profile.issues : profile.issues.slice(0, ISSUE_PREVIEW);
   const health = profile.health;
   const looksEmpty = health?.looks_empty_cells ?? 0;
   const completeness = health?.real_completeness ?? s.completeness;
@@ -293,8 +267,19 @@ export function OverviewPanel() {
             Completeness only shows empty cells, so check the problems listed below. Quick Clean fixes the safe ones in one go.
           </Alert>
         ) : (
-          <Alert tone="success" title={health.notes ? `No problems found, only ${pluralize(health.notes, "note")} to review` : "No problems found"}>
-            The checks found nothing that needs fixing in this data.
+          <Alert
+            tone="success"
+            title={
+              profile.triage?.client_open
+                ? `Nothing left for the tool to fix. ${pluralize(profile.triage.client_open, "item")} for your client`
+                : health.notes
+                  ? `No problems left, only ${pluralize(health.notes, "note")} to review`
+                  : "No problems found"
+            }
+          >
+            {profile.triage?.client_open
+              ? "Flag those rows for your client, or mark them as reviewed. They are listed below under “Needs your client”."
+              : "The checks found nothing that needs fixing in this data."}
           </Alert>
         )
       )}
@@ -319,32 +304,13 @@ export function OverviewPanel() {
           <CardHeader className="flex-row items-start justify-between gap-3">
             <div>
               <CardTitle>Detected issues</CardTitle>
-              <CardDescription>Potential problems. Nothing is changed until you apply a fix.</CardDescription>
+              <CardDescription>Sorted by what to do: fix, ask your client, or just note. Nothing changes until you apply a step.</CardDescription>
             </div>
             <Badge tone={profile.issues.length ? "warning" : "success"} className="tabular">
-              {profile.issues.length} found
+              {profile.issues.length} open
             </Badge>
           </CardHeader>
-          {profile.issues.length ? (
-            <>
-              <ul className="divide-y divide-border">
-                {issues.map((issue) => (
-                  <IssueRow key={issue.id} issue={issue} />
-                ))}
-              </ul>
-              {profile.issues.length > ISSUE_PREVIEW && (
-                <div className="border-t border-border px-5 py-2.5">
-                  <Button variant="link" size="sm" onClick={() => setShowAll((v) => !v)} aria-expanded={showAll}>
-                    {showAll ? "Show fewer issues" : `Show all ${profile.issues.length} issues`}
-                  </Button>
-                </div>
-              )}
-            </>
-          ) : (
-            <EmptyState icon={<CheckCircle2 />} title="No issues detected" className="py-10">
-              The automatic checks found nothing to fix. You can still review the data or download it.
-            </EmptyState>
-          )}
+          <IssueList profile={profile} editable={dataset === "current"} onChanged={reload} />
         </Card>
         <QualitySummary profile={profile} applied={dataset === "current" ? applied : 0} />
       </div>

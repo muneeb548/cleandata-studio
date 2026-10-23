@@ -261,7 +261,40 @@ def get_profile(session: Session, which: str = "current", light: bool = False) -
 
     profile = dict(session.cached((_key(session, which), "profile"), compute))
     profile["dataset"] = which
-    return profile
+    from types import SimpleNamespace
+
+    from app.services.triage import annotate
+
+    # The original upload has no steps and no reviews: its issues get labels only.
+    context = session if which == "current" else SimpleNamespace(history=[], files={}, reviewed={})
+    return annotate(profile, context)
+
+
+def review_issue(session: Session, issue_id: str, reason: str) -> dict:
+    """Mark a detected issue as checked: it leaves the open list and appears in the change report."""
+    from app.services.triage import review
+
+    with session.lock:
+        issue = next((i for i in get_profile(session)["issues"] if i["id"] == issue_id), None)
+        if issue is None:
+            raise AppError("issue_not_found", "That issue is no longer in the list.",
+                           "Reload the overview; the data may have changed.", status=404)
+        if not reason.strip():
+            raise AppError("reason_required", "Write in a few words why this is fine.",
+                           'For example: "Not every customer is a loyalty member."')
+        review(session, issue, reason)
+        session.save()
+        return {"reviewed": get_profile(session)["reviewed"]}
+
+
+def unreview_issue(session: Session, issue_id: str) -> dict:
+    from app.services.triage import unreview
+
+    with session.lock:
+        if not unreview(session, issue_id):
+            raise AppError("issue_not_found", "That issue was not marked as reviewed.", None, status=404)
+        session.save()
+        return {"reviewed": get_profile(session)["reviewed"]}
 
 
 def _view_index(session: Session, which: str, df: pd.DataFrame, search: str | None,
@@ -545,7 +578,8 @@ def change_report(session: Session) -> dict:
     from app.services.quick_clean import change_report as build
 
     with session.lock:
-        return build(session.filename, session.original, session.current, [h.public() for h in session.history])
+        return build(session.filename, session.original, session.current, [h.public() for h in session.history],
+                     reviewed=list(session.reviewed.values()))
 
 
 def undo(session: Session) -> dict:

@@ -536,6 +536,14 @@ export function formForIssue(choice: CleanChoice, column: string | null | undefi
     case "clean_numbers":
       f.numColumns = one;
       break;
+    case "flag_rows": {
+      // From a "Needs your client" issue: the matching check for that column, ready to add.
+      const kind = issueId?.split(":", 1)[0];
+      const check: FlagRule["check"] | null =
+        kind === "missing" ? "missing" : kind === "emails" ? "invalid_email" : kind === "phones" ? "invalid_phone" : kind === "outliers" ? "out_of_range" : kind === "mixed" ? "not_number" : null;
+      if (column && check && !f.flagRules.some((r) => r.column === column && r.check === check)) f.flagRules = [...f.flagRules, { column, check }];
+      break;
+    }
   }
   return f;
 }
