@@ -150,6 +150,36 @@ export interface Issue {
   suggested_operation: OperationType | "outliers" | null;
   /** One affected value, when the issue is about specific values (e.g. a placeholder). */
   example?: string | null;
+  /** fix: the tool can fix it; client: needs a guess, flag it and ask; info: nothing is wrong. */
+  action?: IssueAction;
+  action_text?: string | null;
+  /** A ready reason for "Mark as reviewed". */
+  suggested_reason?: string | null;
+  /** Review column of a Flag rows step that already marks these rows. */
+  flagged_in?: string | null;
+}
+
+export type IssueAction = "fix" | "client" | "info";
+
+export interface ReviewedIssue {
+  id: string;
+  title: string;
+  reason: string;
+  at: number;
+  column?: string | null;
+  count?: number | null;
+  /** false when the issue is no longer detected (for example fixed later) */
+  still_open: boolean;
+}
+
+export interface Triage {
+  fix: number;
+  client: number;
+  info: number;
+  flagged: number;
+  reviewed: number;
+  /** needs-your-client issues not yet marked by a Flag rows step */
+  client_open: number;
 }
 
 export interface Profile {
@@ -160,6 +190,8 @@ export interface Profile {
   issues: Issue[];
   /** not calculated in the light profile */
   health?: Health | null;
+  reviewed?: ReviewedIssue[];
+  triage?: Triage | null;
 }
 
 export interface RowsPage {
@@ -250,6 +282,7 @@ export interface ChangeReport {
   steps: { label: string; summary: string }[];
   review: { column: string; rows: number }[];
   open_items: string[];
+  checked?: { title: string; reason: string }[];
   message: string;
 }
 

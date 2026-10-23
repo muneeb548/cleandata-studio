@@ -23,6 +23,7 @@ import type {
   QuickCleanPreview,
   QuickCleanResult,
   Recipe,
+  ReviewedIssue,
   OutlierReport,
   Profile,
   RowsPage,
@@ -294,6 +295,10 @@ export const api = {
     }),
   filePreview: (id: string) => request<AttachedFilePreview>(`/api/files/${encodeURIComponent(id)}`),
   removeFile: (id: string) => request<SessionInfo>(`/api/files/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  reviewIssue: (issueId: string, reason: string) =>
+    request<{ reviewed: ReviewedIssue[] }>("/api/issues/review", { method: "POST", body: JSON.stringify({ issue_id: issueId, reason }) }),
+  unreviewIssue: (issueId: string) =>
+    request<{ reviewed: ReviewedIssue[] }>("/api/issues/unreview", { method: "POST", body: JSON.stringify({ issue_id: issueId }) }),
   history: () => request<HistoryResponse>("/api/history"),
   undo: () => request<{ undone: HistoryItem; session: SessionInfo }>("/api/undo", { method: "POST" }),
   reset: () => request<{ steps_removed: number; session: SessionInfo }>("/api/reset", { method: "POST" }),

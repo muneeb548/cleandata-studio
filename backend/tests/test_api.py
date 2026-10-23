@@ -81,6 +81,7 @@ def test_openapi_documents_every_endpoint():
         "/api/quick-clean/plan": {"get"}, "/api/quick-clean/preview": {"post"}, "/api/quick-clean/apply": {"post"},
         "/api/report": {"get"}, "/api/recipe": {"get"},
         "/api/files": {"post"}, "/api/files/{file_id}": {"get", "delete"},
+        "/api/issues/review": {"post"}, "/api/issues/unreview": {"post"},
         "/api/ai/status": {"get"}, "/api/ai/plan": {"post"}, "/api/ai/map-values": {"post"}, "/api/ai/summary": {"post"}, "/api/ai/ask": {"post"},
     }
     for path, methods in expected.items():
@@ -497,3 +498,17 @@ def test_ttl_zero_never_expires(monkeypatch):
     monkeypatch.setattr(store, "ttl", 0)
     assert client.get("/api/session", headers=h).status_code == 200
     assert client.get("/api/config").json()["save_sessions"] in (True, False)
+
+
+def test_review_endpoints():
+    h = session_headers(upload())
+    issue = next(i for i in client.get("/api/profile", headers=h).json()["issues"] if i["id"].startswith("missing:"))
+    assert issue["action"] in ("client", "info")
+    r = client.post("/api/issues/review", json={"issue_id": issue["id"], "reason": "Not given."}, headers=h)
+    assert r.status_code == 200 and r.json()["reviewed"][0]["reason"] == "Not given."
+    assert client.post("/api/issues/review", json={"issue_id": issue["id"], "reason": ""}, headers=h).status_code in (404, 422)
+    profile = client.get("/api/profile", headers=h).json()
+    assert issue["id"] not in {i["id"] for i in profile["issues"]} and profile["triage"]["reviewed"] == 1
+    assert "Checked and left as they are" in client.get("/api/report", headers=h).json()["message"]
+    r = client.post("/api/issues/unreview", json={"issue_id": issue["id"]}, headers=h)
+    assert r.status_code == 200 and r.json()["reviewed"] == []

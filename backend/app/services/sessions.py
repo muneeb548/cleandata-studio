@@ -136,6 +136,8 @@ class Session:
     ai_calls: int = 0
     # Other files added to combine with this one (append rows / join columns), by id.
     files: dict[str, AttachedFile] = field(default_factory=dict)
+    # Issues the user marked as reviewed, by issue id: {title, reason, at, column, count}.
+    reviewed: dict[str, dict] = field(default_factory=dict)
     # Writes this session to disk after every change when SAVE_SESSIONS is on (see persistence.py).
     saver: Any = field(default=None, repr=False)
 

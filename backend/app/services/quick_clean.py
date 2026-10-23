@@ -241,7 +241,8 @@ def plan(df: pd.DataFrame) -> dict:
 
 # --------------------------------------------------------------------------- change report
 
-def change_report(filename: str, original: pd.DataFrame, current: pd.DataFrame, steps: list[dict]) -> dict:
+def change_report(filename: str, original: pd.DataFrame, current: pd.DataFrame, steps: list[dict],
+                  reviewed: list[dict] | None = None) -> dict:
     """What was done to the file, what is marked for review and what is still open, plus a ready-to-send message."""
     review = []
     for step in steps:
@@ -257,6 +258,10 @@ def change_report(filename: str, original: pd.DataFrame, current: pd.DataFrame, 
         lines += ["", "Please review:"]
         lines += [f'• {r["rows"]:,} row{"s" if r["rows"] != 1 else ""} are marked in the "{r["column"]}" column.'
                   for r in review]
+    checked = [{"title": r["title"], "reason": r.get("reason", "")} for r in (reviewed or [])]
+    if checked:
+        lines += ["", "Checked and left as they are:"]
+        lines += [f"• {c['title']}: {c['reason']}" if c["reason"] else f"• {c['title']}" for c in checked]
     if open_items:
         lines += ["", "Left for your decision (not changed):"]
         lines += [f"• {item}" for item in open_items[:10]]
@@ -268,5 +273,6 @@ def change_report(filename: str, original: pd.DataFrame, current: pd.DataFrame, 
         "steps": [{"label": s["label"], "summary": s["summary"]} for s in steps],
         "review": review,
         "open_items": open_items,
+        "checked": checked,
         "message": "\n".join(lines),
     }

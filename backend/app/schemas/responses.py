@@ -4,9 +4,9 @@ against the real service output in tests/test_schemas.py."""
 from __future__ import annotations
 
 import os
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 Cell = str | int | float | bool | None
 ColumnType = Literal["integer", "decimal", "text", "datetime", "boolean", "empty"]
@@ -168,6 +168,41 @@ class Issue(_Model):
     count: int | None
     suggested_operation: str | None
     example: str | None = Field(None, description="A real value from the data that triggered the issue (used to pre-fill fixes).")
+    action: Literal["fix", "client", "info"] = Field(
+        "fix", description="fix: the tool can fix it; client: needs a guess, flag it and ask; info: nothing is wrong.")
+    action_text: str | None = None
+    suggested_reason: str | None = Field(None, description='A ready reason for "Mark as reviewed".')
+    flagged_in: str | None = Field(None, description="Review column of a Flag rows step that already marks these rows.")
+
+
+class ReviewedIssue(_Model):
+    id: str
+    title: str
+    reason: str
+    at: float
+    column: str | None = None
+    count: int | None = None
+    still_open: bool = Field(description="False when the issue is no longer detected (for example after a later fix).")
+
+
+class Triage(_Model):
+    fix: int
+    client: int
+    info: int
+    flagged: int
+    reviewed: int
+    client_open: int = Field(description="Needs-your-client issues not yet marked by a Flag rows step.")
+
+
+class ReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issue_id: Annotated[str, StringConstraints(min_length=1, max_length=1100)]
+    reason: Annotated[str, StringConstraints(max_length=500)] = ""
+
+
+class ReviewedList(_Model):
+    reviewed: list[ReviewedIssue]
 
 
 class DataHealth(_Model):
@@ -187,6 +222,8 @@ class Profile(_Model):
     issues: list[Issue]
     health: DataHealth | None = Field(None, description="Not calculated in the light profile.")
     light: bool = False
+    reviewed: list[ReviewedIssue] = Field(default_factory=list, description="Issues marked as reviewed, with the reason.")
+    triage: Triage | None = None
 
 
 class RowsColumn(_Model):
@@ -354,6 +391,7 @@ class ChangeReport(_Model):
     steps: list[ReportStep]
     review: list[ReviewColumn]
     open_items: list[str]
+    checked: list[dict[str, str]] = Field(default_factory=list, description="Issues marked as reviewed and why.")
     message: str = Field(description="A ready-to-send summary for the client.")
 
 
