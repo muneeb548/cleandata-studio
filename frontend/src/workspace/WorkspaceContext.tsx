@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, getSessionId, SESSION_ENDED_EVENT, SESSION_GONE, setSessionId } from "@/api/client";
+import { api, getSessionId, SESSION_ENDED_EVENT, SESSION_GONE, setKeepAcrossVisits, setSessionId } from "@/api/client";
 import type { AppConfig, OperationType, SessionInfo, UploadResponse } from "@/api/types";
 import { useToast } from "@/components/ui/toast";
 import { loadWork, forgetWork, saveWork, type SavedWork } from "./savedWork";
@@ -54,7 +54,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [resume, setResume] = useState<SavedWork | null>(null);
 
   useEffect(() => {
-    api.config().then(setConfig).catch(() => setConfig(null));
+    api
+      .config()
+      .then((c) => {
+        setConfig(c);
+        setKeepAcrossVisits(!!c.save_sessions);
+      })
+      .catch(() => setConfig(null));
   }, []);
   // A ref (not state) so a fast double-click can't start two requests before React re-renders.
   const inFlight = useRef(false);

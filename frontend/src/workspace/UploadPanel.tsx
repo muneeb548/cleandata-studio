@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { ProgressBar, Spinner } from "@/components/ui/misc";
 import { FieldHint, Input, Label, Select } from "@/components/ui/form";
 import { useToast } from "@/components/ui/toast";
+import { keepText } from "@/lib/limits";
 import { Link } from "@/lib/router";
 import { SUPPORTED_EXTENSIONS, cn, formatBytes, formatDuration, formatFromName } from "@/lib/utils";
 import { toApiError } from "./useAsync";
@@ -37,7 +38,6 @@ export function UploadPanel() {
   const abortRef = useRef<AbortController | null>(null);
   // Real limits come from GET /api/config; the server re-checks every upload anyway.
   const maxMb = config?.max_upload_mb ?? 100;
-  const ttl = config?.session_ttl_minutes ?? 30;
   const [dragging, setDragging] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [processingSince, setProcessingSince] = useState<number | null>(null);
@@ -258,7 +258,7 @@ export function UploadPanel() {
         <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
         <span>
           Your file is processed on the CleanData Studio server: it is held in a temporary file only while it is imported,
-          then kept in memory and deleted after {ttl} minutes of inactivity. The full file is never sent to an AI.{" "}
+          then {config?.save_sessions ? "saved on this computer" : "kept in memory"}. {keepText(config)} The full file is never sent to an AI.{" "}
           <Link href="/privacy" className="text-primary hover:underline">
             Privacy details
           </Link>

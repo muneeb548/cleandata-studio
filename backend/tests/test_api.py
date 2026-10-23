@@ -195,7 +195,8 @@ def test_expired_session_is_rejected(monkeypatch):
     from app.services.sessions import store
 
     h = session_headers(upload())
-    monkeypatch.setattr(store, "ttl", -1)
+    monkeypatch.setattr(store, "ttl", 60)
+    store.get(h["X-Session-Id"]).last_access -= 3600  # an hour without activity
     r = client.get("/api/session", headers=h)
     assert r.status_code == 404 and error_code(r) == "session_expired"
 
@@ -487,3 +488,12 @@ def test_force_https_redirects_only_proxied_http(monkeypatch):
 def test_unknown_api_path_is_404_json():
     r = client.get("/api/does-not-exist")
     assert r.status_code == 404
+
+
+def test_ttl_zero_never_expires(monkeypatch):
+    from app.services.sessions import store
+
+    h = session_headers(upload())
+    monkeypatch.setattr(store, "ttl", 0)
+    assert client.get("/api/session", headers=h).status_code == 200
+    assert client.get("/api/config").json()["save_sessions"] in (True, False)

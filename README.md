@@ -36,6 +36,7 @@ CleanData Studio is a web application for cleaning messy tabular data without wr
   - Standardize phone numbers from any country (Google libphonenumber): national, international or E.164 format; the country can come from a column such as `country`
   - Standardize country names or ISO codes for all 249 ISO countries plus Kosovo, with common spellings, local names and three-letter codes
   - Clean email addresses (spaces, capitals, `mailto:`, optional provider typo fixes) and list invalid ones
+  - Convert all amounts to one currency: the currency of each value comes from its mark (£, €, USD, PKR), or for plain numbers and shared marks ($, Rs, ¥) from the row's country column; you type the exchange rates (nothing is guessed) and a missing rate blocks the step
   - Clean amounts in any currency and number style (`$1,250.00`, `Rs 1,25,000`, `1.234,56 €`, `(500)`) into real numbers, with a warning when one column mixes currencies
   - Find near-duplicates (same record written differently, optional small spelling differences) and flag or remove them
   - Flag rows for review in a new column (missing, invalid email or phone, not a number or date, repeated value, outside an allowed range such as age 0–100 or dates in 2024) without changing any data
@@ -315,6 +316,16 @@ Set `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...` (from <https://console.a
 - **Spreadsheet formula injection:** text such as `=HYPERLINK(...)` in a CSV can be executed when the file is opened in Excel. The quality report flags such values, and the CSV download has an optional *Protect against spreadsheet formulas* setting (`protect_formulas=true`) that prefixes them with `'`. It is off by default because it changes values. Excel (.xlsx) downloads always store them as text.
 - Security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, CSP for API responses) and per-IP rate limits are applied.
 - Because files are processed by a server, they **do** leave the user's device. When you run the app locally, that server is your own computer.
+
+## Saved sessions (your own computer)
+
+Set `SAVE_SESSIONS=true` (and `SESSION_TTL_MINUTES=0` for no time limit) in `backend/.env` to keep each
+dataset on disk in `backend/saved_sessions/` (or `SESSIONS_DIR`). Closing the browser, restarting the
+server or the laptop no longer loses work: the app reopens the same file, the files added for Combine
+files, every applied step (with Undo) and the activity log. Only the original data, the added files and
+the steps' settings are written; the working data is rebuilt by replaying the steps. The browser keeps the
+session token in localStorage in this mode so a new tab opens the same dataset. "Delete my data now" removes
+the folder. Meant for local use only: production refuses to start with it on.
 
 ## In-memory storage and multiple workers
 

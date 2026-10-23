@@ -111,7 +111,7 @@ def attach_file_from_path(store: SessionStore, session: Session, filename: str |
         raise AppError("file_too_large", f"The file is larger than the {settings.max_upload_mb} MB limit.",
                        "Split the file into smaller parts or remove unneeded columns.", status=413)
     with session.lock:
-        if len(session.files) >= MAX_ATTACHED_FILES:
+        if len(session.visible_files) >= MAX_ATTACHED_FILES:
             raise AppError("too_many_files", f"You can add up to {MAX_ATTACHED_FILES} other files to one dataset.",
                            "Remove a file you no longer need, then add the new one.", status=409)
     try:
@@ -129,10 +129,11 @@ def attach_file_from_path(store: SessionStore, session: Session, filename: str |
                             sheet=result.sheet, df=result.df, warnings=result.warnings,
                             added_at=time.time(), bytes=size_in_memory)
     with session.lock:
-        if len(session.files) >= MAX_ATTACHED_FILES:
+        if len(session.visible_files) >= MAX_ATTACHED_FILES:
             raise AppError("too_many_files", f"You can add up to {MAX_ATTACHED_FILES} other files to one dataset.",
                            "Remove a file you no longer need, then add the new one.", status=409)
         session.files[attached.id] = attached
+        session.save()
         return {"file": attached.public(), "session": session_info(session)}
 
 
@@ -152,8 +153,15 @@ def attach_file(store: SessionStore, session: Session, filename: str | None, raw
 def remove_file(session: Session, file_id: str) -> dict:
     """Forget an added file. Steps already applied with it keep their result (and can be undone)."""
     with session.lock:
-        if session.files.pop(file_id, None) is None:
+        attached = session.files.get(file_id)
+        if attached is None or attached.removed:
             raise AppError("file_not_found", "That file is no longer available.", None, status=404)
+        used = any(h.type == "combine_files" and h.params.get("file_id") == file_id for h in session.history)
+        if used:
+            attached.removed = True  # still needed to rebuild the applied step; hidden from the list
+        else:
+            del session.files[file_id]
+        session.save()
         return session_info(session)
 
 
@@ -161,7 +169,7 @@ def preview_file(session: Session, file_id: str, rows: int = 10) -> dict:
     """The first rows of an added file, so the user can check it before combining."""
     with session.lock:
         attached = session.files.get(file_id)
-        if attached is None:
+        if attached is None or attached.removed:
             raise AppError("file_not_found", "That file is no longer available.",
                            "Add the file again.", status=404)
         df = attached.df.head(max(1, min(rows, 50)))
@@ -198,7 +206,8 @@ def session_info(session: Session) -> dict:
         "log": [e.public() for e in session.log],
         "can_undo": session.can_undo,
         "expires_in_seconds": settings.session_ttl_minutes * 60,
-        "files": [f.public() for f in session.files.values()],
+        "files": [f.public() for f in session.visible_files],
+        "saved": session.saver is not None,
     }
 
 
@@ -449,6 +458,7 @@ def _apply_step(session: Session, op: BaseModel) -> tuple[dict, HistoryEntry | N
         bytes=new_bytes(result.df, before),
     )
     session.push(entry, settings.max_history_snapshots, settings.max_history_bytes)
+    session.save()
     return description, entry
 
 
@@ -541,12 +551,14 @@ def change_report(session: Session) -> dict:
 def undo(session: Session) -> dict:
     with session.lock:
         entry = session.undo()
+        session.save()
         return {"undone": entry.public(), "session": session_info(session)}
 
 
 def reset(session: Session) -> dict:
     with session.lock:
         removed = session.reset()
+        session.save()
         return {"steps_removed": removed, "session": session_info(session)}
 
 

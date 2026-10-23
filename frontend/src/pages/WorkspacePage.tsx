@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { LoadingBlock } from "@/components/ui/misc";
 import { Tooltip } from "@/components/ui/tooltip";
+import { keepText } from "@/lib/limits";
 import { Link } from "@/lib/router";
 import { usePageMeta } from "@/lib/seo";
 import { cn, formatBytes, formatNumber, pluralize } from "@/lib/utils";
@@ -247,7 +248,7 @@ function Sidebar() {
         <p className="flex gap-2 text-caption text-muted-foreground">
           <ShieldCheck className="mt-px size-3.5 shrink-0 text-slate-500" aria-hidden="true" />
           <span>
-            Deleted after {config?.session_ttl_minutes ?? 30} min of inactivity.{" "}
+            {keepText(config)}{" "}
             <Link href="/privacy" className="text-primary hover:underline">
               Privacy
             </Link>
@@ -335,7 +336,7 @@ function UploadFooter() {
   if (status === "ready") return null;
   return (
     <footer className="border-t border-border bg-background px-4 py-3 text-center text-caption text-muted-foreground sm:px-6">
-      Data is processed on the server and deleted after {config?.session_ttl_minutes ?? 30} minutes of inactivity.{" "}
+      Data is processed on the server. {keepText(config)}{" "}
       <Link href="/privacy" className="text-primary hover:underline">
         Privacy
       </Link>

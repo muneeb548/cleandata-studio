@@ -58,6 +58,13 @@ export type FormState = {
   numColumns: string[];
   numDecimal: "auto" | "." | ",";
   numOnError: "abort" | "set_missing";
+  /** Convert all amounts to one currency */
+  numConvert: boolean;
+  numTarget: string;
+  numCountryColumn: string;
+  numDefaultCurrency: string;
+  /** rate typed per currency: 1 <code> = <rate> <target> */
+  numRates: Record<string, string>;
   mapColumn: string;
   mapEdits: Record<string, string>;
   mapIgnoreCase: boolean;
@@ -137,6 +144,11 @@ export const DEFAULT_FORM: FormState = {
   numColumns: [],
   numDecimal: "auto",
   numOnError: "abort",
+  numConvert: false,
+  numTarget: "USD",
+  numCountryColumn: "",
+  numDefaultCurrency: "",
+  numRates: {},
   mapColumn: "",
   mapEdits: {},
   mapIgnoreCase: true,
@@ -347,10 +359,28 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
             },
           }
         : { error: "Select at least one column." };
-    case "clean_numbers":
-      return f.numColumns.length
-        ? { operation: { type: "clean_numbers", columns: f.numColumns, decimal: f.numDecimal, on_error: f.numOnError } }
-        : { error: "Select at least one column." };
+    case "clean_numbers": {
+      if (!f.numColumns.length) return { error: "Select at least one column." };
+      const base = { type: "clean_numbers" as const, columns: f.numColumns, decimal: f.numDecimal, on_error: f.numOnError };
+      if (!f.numConvert) return { operation: base };
+      if (f.numCountryColumn && f.numColumns.includes(f.numCountryColumn)) return { error: "The country column cannot also be an amount column." };
+      const rates: { currency: string; rate: number }[] = [];
+      for (const [currency, text] of Object.entries(f.numRates)) {
+        if (currency === f.numTarget || !text.trim()) continue;
+        const rate = parseRate(text);
+        if (rate === null) return { error: `The rate for ${currency} is not a positive number.` };
+        rates.push({ currency, rate });
+      }
+      return {
+        operation: {
+          ...base,
+          convert_to: f.numTarget,
+          rates,
+          country_column: f.numCountryColumn || null,
+          default_currency: f.numDefaultCurrency || null,
+        },
+      };
+    }
     case "near_duplicates":
       if (!f.ndColumns.length) return { error: "Select the columns that identify a record, e.g. name and email." };
       if (f.ndAction === "flag" && !f.ndColumnName.trim()) return { error: "Enter a name for the group column." };
@@ -428,6 +458,17 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
       return { error: "Outlier review does not change data." };
   }
 }
+
+/** A typed exchange rate ("0.0036", "1,27", " 280 ") as a positive number, or null. */
+export function parseRate(text: string): number | null {
+  const t = text.trim().replace(/\s/g, "");
+  if (!/^\d+([.,]\d+)?$/.test(t)) return null;
+  const n = Number(t.replace(",", "."));
+  return n > 0 ? n : null;
+}
+
+/** Currencies offered as target or default (the rest can still be found in a file). */
+export const CURRENCIES = ["USD", "EUR", "GBP", "PKR", "INR", "AED", "SAR", "QAR", "KWD", "CAD", "AUD", "NZD", "CHF", "JPY", "CNY", "SGD", "MYR", "BDT", "LKR", "TRY", "ZAR", "NGN", "EGP"];
 
 /** Columns that probably hold the same thing in both files (same name ignoring case, spaces and _ or -). */
 export function suggestJoinKey(current: string[], other: string[]): JoinKey | null {

@@ -22,3 +22,6 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Saved sessions (SAVE_SESSIONS=true): customer data on this computer, never commit it
+backend/saved_sessions/

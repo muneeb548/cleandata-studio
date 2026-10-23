@@ -300,3 +300,17 @@ def test_outlier_detection_does_not_modify(frame):
 def test_outliers_rejected_for_text(frame):
     with pytest.raises(AppError):
         ops.outlier_report(frame(MESSY_CSV), "City")
+
+
+def test_day_first_never_swaps_year_first_dates(frame):
+    """Regression: with "day comes first", 2023-05-01 must stay 1 May (it became 5 January)."""
+    from app.schemas.operations import ConvertType
+    from app.services.operations import run_operation
+
+    df = frame("d\n2023-05-01\n05/01/2023\n2024/10/11\n11-Jul-2023\n\"May 03, 2023\"\n2024-02-07 14:30\n13/02/2024\n")
+    out = run_operation(df, ConvertType(type="convert_type", columns=["d"], target="datetime", dayfirst=True)).df
+    assert [str(v)[:16] for v in out["d"]] == [
+        "2023-05-01 00:00", "2023-01-05 00:00", "2024-10-11 00:00", "2023-07-11 00:00",
+        "2023-05-03 00:00", "2024-02-07 14:30", "2024-02-13 00:00"]
+    us = run_operation(df.iloc[:2], ConvertType(type="convert_type", columns=["d"], target="datetime")).df
+    assert [str(v)[:10] for v in us["d"]] == ["2023-05-01", "2023-05-01"]

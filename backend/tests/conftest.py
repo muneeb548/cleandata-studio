@@ -6,6 +6,9 @@ os.environ.setdefault("CLEANDATA_STRICT_SCHEMAS", "1")  # response models reject
 # The API tests upload many files from one client; rate limiting has its own test.
 os.environ.setdefault("UPLOAD_LIMIT_PER_MINUTE", "100000")
 os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "100000")
+# Tests never read or write your saved datasets, whatever backend/.env says.
+os.environ["SAVE_SESSIONS"] = "false"
+os.environ["SESSION_TTL_MINUTES"] = "30"
 
 import pytest
 
