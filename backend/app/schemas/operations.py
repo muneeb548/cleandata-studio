@@ -403,9 +403,14 @@ class CombineFiles(_Op):
                             "outer also adds rows of the other file that matched nothing."
     )
     loose_keys: bool = Field(True, description="join: ignore capitals and extra spaces when comparing keys.")
-    duplicates: Literal["first", "all"] = Field(
+    duplicates: Literal["first", "all", "stop"] = Field(
         "first", description="join: when a key appears several times in the other file, use the first match "
-                             "(like VLOOKUP) or every match (rows are repeated)."
+                             "(like VLOOKUP), every match (rows are repeated), or stop and list those values "
+                             "(like pandas validate='many_to_one')."
+    )
+    match_column: NewColumnName | None = Field(
+        None, description="join: optional new column that says for each row whether it matched "
+                          "(like pandas indicator=True): matched, no match, empty key, or only in the other file."
     )
     columns: ColumnList = Field(
         default_factory=list, description="join: columns to bring from the other file. Empty = all except the keys."
@@ -414,7 +419,7 @@ class CombineFiles(_Op):
         "_2", description="join: added to a brought column whose name is already used."
     )
 
-    @field_validator("source_column")
+    @field_validator("source_column", "match_column")
     @classmethod
     def _check_source(cls, value: str | None) -> str | None:
         if value is None or value.strip() == "":

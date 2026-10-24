@@ -397,3 +397,89 @@ def test_ai_assistant_never_plans_combining(session):
     accepted, rejected = ai.validate_steps(session.current, [
         {"operation": "combine_files", "settings": '{"file_id": "x"}', "reason": ""}])
     assert not accepted and "Combine files" in rejected[0]["reason"]
+
+
+# ------------------------------------------------- repeated keys on both sides (many-to-many)
+# The case from a review: two sales rows and two reference rows with the same customer ID.
+# A plain pandas merge turns them into four rows; the tool must never do that silently.
+SALES = "order_id,customer_id,amount\n1,C001,100\n2,C001,50\n3,C002,70\n4,C003,30\n5,,20\n"
+TIERS = "customer_id,tier\nC001,Gold\nC001,Silver\nC002,Bronze\nC002,Bronze\n"
+
+
+@pytest.fixture
+def sales(store):
+    s = store.get(workspace.create_session(store, "sales.csv", SALES.encode())["session_id"])
+    fid = workspace.attach_file(store, s, "tiers.csv", TIERS.encode())["file"]["id"]
+    return s, fid
+
+
+def tier_join(fid, **kw):
+    return OP.validate_python({"type": "combine_files", "file_id": fid, "mode": "join",
+                               "keys": [{"left": "customer_id", "right": "customer_id"}], **kw})
+
+
+def test_many_to_many_first_match_keeps_row_count_and_names_the_conflict(sales):
+    s, fid = sales
+    result = preview_apply(s, tier_join(fid))
+    df = s.current
+    assert len(df) == 5  # not 2 x 2 = 4 rows for C001
+    assert values(df["tier"]) == ["Gold", "Gold", "Bronze", None, None]
+    d = result["details"]
+    assert d["rows_before"] == 5 and d["rows_after"] == 5
+    assert d["duplicate_keys_in_other"] == 2 and d["conflicting_duplicate_keys"] == 1
+    assert d["duplicate_examples"][0]["value"] == "C001"  # the disagreeing one is listed first
+    warning = next(w for w in result["warnings"] if "more than once" in w)
+    assert "Gold, Silver" in warning and "may not be the right one" in warning
+
+
+def test_many_to_many_every_match_reports_the_multiplication(sales):
+    s, fid = sales
+    result = preview_apply(s, tier_join(fid, duplicates="all"))
+    df = s.current
+    # C001: 2 sales x 2 tiers = 4 rows; C002: 1 sale x 2 tiers = 2 rows; C003 and the blank: 1 each.
+    assert len(df) == 8
+    assert values(df["order_id"]).count("1") == 2 and values(df["order_id"]).count("2") == 2
+    assert result["details"]["rows_added"] == 3
+    assert any("3 extra rows were added" in w and "5 → 8 rows" in w for w in result["warnings"])
+
+
+def test_stop_option_blocks_repeated_keys_like_validate_many_to_one(sales):
+    s, fid = sales
+    preview = workspace.preview_operation(s, tier_join(fid, duplicates="stop"))
+    assert preview["blocked"] and '"C001" (2 rows, different tier: Gold, Silver)' in preview["blocked"]
+    assert '"C002" (2 rows)' in preview["blocked"]
+    with pytest.raises(AppError):
+        workspace.apply_operation(s, tier_join(fid, duplicates="stop"))
+    assert len(s.current) == 5
+
+
+def test_stop_option_passes_when_every_key_is_unique(store):
+    s = store.get(workspace.create_session(store, "sales.csv", SALES.encode())["session_id"])
+    fid = workspace.attach_file(store, s, "tiers.csv", b"customer_id,tier\nC001,Gold\nC002,Bronze\n")["file"]["id"]
+    preview_apply(s, tier_join(fid, duplicates="stop"))
+    assert values(s.current["tier"]) == ["Gold", "Gold", "Bronze", None, None]
+
+
+def test_match_column_marks_each_row_like_indicator(sales):
+    s, fid = sales
+    result = preview_apply(s, tier_join(fid, match_column="match_status"))
+    assert values(s.current["match_status"]) == ["matched", "matched", "matched", "no match", "empty key"]
+    assert "match_status" in result["details"]["added_columns"]
+    # Unmatched and empty keys are reported separately, not in one count.
+    assert any(w.startswith("1 row of your data found no match") for w in result["warnings"])
+    assert any(w.startswith("1 row of your data has an empty match value") for w in result["warnings"])
+    assert "missing:match_status" not in {i["id"] for i in workspace.get_profile(s)["issues"]}
+
+
+def test_match_column_with_outer_join_marks_rows_only_in_the_other_file(store):
+    s = store.get(workspace.create_session(store, "sales.csv", SALES.encode())["session_id"])
+    fid = workspace.attach_file(store, s, "tiers.csv", b"customer_id,tier\nC001,Gold\nC009,Silver\n")["file"]["id"]
+    preview_apply(s, tier_join(fid, how="outer", match_column="match_status"))
+    assert values(s.current["match_status"])[-1] == "only in tiers.csv"
+
+
+def test_match_column_name_must_be_new(sales):
+    s, fid = sales
+    with pytest.raises(AppError) as err:
+        workspace.preview_operation(s, tier_join(fid, match_column="amount"))
+    assert err.value.code == "column_exists"

@@ -375,7 +375,8 @@ export type Operation =
       keys?: JoinKey[];
       how?: JoinHow;
       loose_keys?: boolean;
-      duplicates?: "first" | "all";
+      duplicates?: "first" | "all" | "stop";
+      match_column?: string | null;
       columns?: string[];
       suffix?: string;
     };
