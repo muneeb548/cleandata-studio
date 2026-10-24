@@ -128,6 +128,54 @@ def _row_keys(df: pd.DataFrame, cols: list[str], loose: bool) -> pd.Series:
     return key.reset_index(drop=True)
 
 
+MATCHED, NO_MATCH, EMPTY_KEY = "matched", "no match", "empty key"
+MAX_EXAMPLES = 5
+
+
+def _duplicate_examples(other: pd.DataFrame, key: pd.Series, key_cols: list[str], bring: list) -> tuple[list[dict], int]:
+    """Key values that appear more than once in the other file, and how many of them disagree.
+
+    A repeated key whose rows are identical in the brought columns is harmless (any copy gives the
+    same answer). One whose rows differ (C001 is Gold in one row and Silver in another) means any
+    single pick is a guess, so it is counted as conflicting. Disagreeing examples come first.
+    """
+    valid = key.notna().to_numpy()
+    k = key[valid]
+    counts = k.value_counts()
+    repeated = counts[counts > 1]
+    if repeated.empty:
+        return [], 0
+    rows = other.reset_index(drop=True).loc[valid]
+    rows.index = k.index
+    cols = [c for c in bring if c in rows.columns]
+    differs = pd.DataFrame(index=repeated.index)
+    for c in cols:
+        n = _text(rows[c]).fillna("\x00").groupby(k, sort=False).nunique()
+        differs[str(c)] = n.reindex(repeated.index) > 1
+    conflict = differs.any(axis=1) if cols else pd.Series(False, index=repeated.index)
+    order = list(repeated.index[conflict.to_numpy()]) + list(repeated.index[~conflict.to_numpy()])
+    examples: list[dict] = []
+    for value in order[:MAX_EXAMPLES]:
+        part = rows[(k == value).to_numpy()]
+        diff_cols = [c for c in differs.columns if differs.at[value, c]][:3]
+        first = part.iloc[0]
+        examples.append({
+            "value": " + ".join(str(first[c]) for c in key_cols),
+            "rows": int(repeated[value]),
+            "differs": diff_cols,
+            "values": {c: [None if pd.isna(v) else str(v) for v in _text(part[c]).head(3)] for c in diff_cols},
+        })
+    return examples, int(conflict.sum())
+
+
+def _example_text(e: dict) -> str:
+    text = f'"{e["value"]}" ({e["rows"]} rows'
+    if e["differs"]:
+        c = e["differs"][0]
+        text += f', different {c}: ' + ", ".join(v if v is not None else "empty" for v in e["values"][c])
+    return text + ")"
+
+
 def _check_size(rows: int, columns: int) -> str | None:
     if rows > MAX_RESULT_ROWS or rows * max(columns, 1) > MAX_RESULT_CELLS:
         return (f"The result would have {rows:,} rows and {columns:,} columns, which is too large. "
@@ -262,6 +310,20 @@ def _join(df: pd.DataFrame, attached, op: CombineFiles, ctx: CombineContext, OpR
     right_valid = right_key.notna()
     dup_mask = right_key.duplicated(keep="first") & right_valid
     right_duplicate_keys = int(right_key[dup_mask].nunique())
+    dup_examples, conflicting = _duplicate_examples(other, right_key, right_cols, bring)
+    if right_duplicate_keys and op.duplicates == "stop":
+        shown = "; ".join(_example_text(e) for e in dup_examples)
+        return OpResult(df, f'{_plural(right_duplicate_keys, "value")} {_v(right_duplicate_keys, "appears", "appear")} '
+                            f'more than once in "{name}".',
+                        blocked=(f'{_plural(right_duplicate_keys, "value")} {_v(right_duplicate_keys, "appears", "appear")} '
+                                 f'more than once in "{name}", so a row of your data could match several rows: {shown}. '
+                                 f'Remove the extra rows from "{name}" (or ask your client which one is right), '
+                                 'or choose "Use the first match" or "Use every match".'),
+                        details={"duplicate_keys_in_other": right_duplicate_keys, "duplicate_examples": dup_examples,
+                                 "conflicting_duplicate_keys": conflicting})
+    if op.match_column and (op.match_column in df.columns or op.match_column in set(out_names.values())):
+        raise AppError("column_exists", f'Column "{op.match_column}" already exists.',
+                       "Choose another name for the column that shows whether each row matched.")
     use_right = right_valid & ~dup_mask if op.duplicates == "first" else right_valid
 
     left_frame = pd.DataFrame({"k": left_key, "lpos": np.arange(len(df))})
@@ -287,7 +349,7 @@ def _join(df: pd.DataFrame, attached, op: CombineFiles, ctx: CombineContext, OpR
     keep = matched if op.how == "inner" else np.ones(len(pairs), dtype=bool)
     lpos_k, rpos_k = lpos[keep], rpos[keep]
     rows = int(keep.sum()) + len(extra_right)
-    columns = len(df.columns) + len(bring)
+    columns = len(df.columns) + len(bring) + bool(op.match_column)
     blocked = _check_size(rows, columns)
     if blocked:
         return OpResult(df, "The combined data would be too large.", blocked=blocked)
@@ -304,6 +366,10 @@ def _join(df: pd.DataFrame, attached, op: CombineFiles, ctx: CombineContext, OpR
         data[out_names[c]] = _take(other[c], rpos_k, index)
     out = pd.DataFrame(data, index=index)
     out.columns = [*df.columns, *[out_names[c] for c in bring]]
+    if op.match_column:
+        blank_left = left_key.isna().to_numpy()[lpos_k]
+        status = np.where(rpos_k >= 0, MATCHED, np.where(blank_left, EMPTY_KEY, NO_MATCH))
+        out[op.match_column] = pd.Series(status, index=index, dtype=STRING_DTYPE)
 
     added_index: list[int] = [int(i) for i in labels[repeat][:SAMPLE_ROWS]]
     if extra_right:
@@ -315,6 +381,8 @@ def _join(df: pd.DataFrame, attached, op: CombineFiles, ctx: CombineContext, OpR
             tail[lc] = _take(other[rc], pos, extra_index)
         for c in bring:
             tail[out_names[c]] = _take(other[c], pos, extra_index)
+        if op.match_column:
+            tail[op.match_column] = pd.Series(f"only in {name}", index=extra_index, dtype=STRING_DTYPE)
         out, retyped = _stack(out, pd.DataFrame(tail, index=extra_index))
         added_index += list(extra_index[: max(0, SAMPLE_ROWS - len(added_index))])
     else:
@@ -325,30 +393,40 @@ def _join(df: pd.DataFrame, attached, op: CombineFiles, ctx: CombineContext, OpR
         int(i) for i in df.index[np.setdiff1d(np.arange(len(df)), lpos[matched])][:SAMPLE_ROWS]]
     rows_added = n_new + len(extra_right)
     new_cols = [out_names[c] for c in bring]
-    filled = int(sum(int(out[c].loc[out.index.isin(df.index)].notna().sum()) for c in new_cols))
+    status_cols = [op.match_column] if op.match_column else []
+    filled = int(sum(int(out[c].loc[out.index.isin(df.index)].notna().sum()) for c in new_cols + status_cols))
 
     match_words = " + ".join(f'"{k.left}" = "{k.right}"' if k.left != k.right else f'"{k.left}"' for k in op.keys)
     summary = (f'Matched {matched_left:,} of {_plural(len(df), "row")} with "{name}" on {match_words}'
                + (f" and added {_plural(len(new_cols), 'column')}: {_names(new_cols)}." if new_cols else "."))
+    if op.match_column:
+        summary += f' "{op.match_column}" shows for each row whether it matched.'
+    no_match = unmatched_left - left_blank
     if op.how == "inner" and removed_rows:
         summary += f" Removed {_plural(removed_rows, 'row')} that had no match."
     if extra_right:
         summary += f' Added {_plural(len(extra_right), "row")} from "{name}" that matched nothing.'
     warnings = []
-    if unmatched_left and op.how == "left":
-        warnings.append(f"{_plural(unmatched_left, 'row')} of your data found no match; "
-                        f"{_v(unmatched_left, 'its', 'their')} new columns are empty.")
+    if no_match and op.how == "left":
+        warnings.append(f"{_plural(no_match, 'row')} of your data found no match in \"{name}\"; "
+                        f"{_v(no_match, 'its', 'their')} new columns are empty.")
     if left_blank:
         warnings.append(f"{_plural(left_blank, 'row')} of your data {_v(left_blank, 'has', 'have')} an empty "
-                        "match value and cannot match anything.")
+                        "match value and cannot match anything"
+                        + (" (removed)." if op.how == "inner" else "; fill it in first if those rows should match."))
     if right_duplicate_keys:
         if op.duplicates == "first":
-            warnings.append(f'{_plural(right_duplicate_keys, "value")} {_v(right_duplicate_keys, "appears", "appear")} '
-                            f'more than once in "{name}"; the first row with each value was used (like VLOOKUP).')
+            text = (f'{_plural(right_duplicate_keys, "value")} {_v(right_duplicate_keys, "appears", "appear")} '
+                    f'more than once in "{name}"; the first row with each value was used (like VLOOKUP), '
+                    f'so the number of rows stays the same. Example: {_example_text(dup_examples[0])}.')
+            if conflicting:
+                text += (f' For {_plural(conflicting, "value")} the rows have different values, so the first one '
+                         'may not be the right one: check with your client, or choose "Stop and show me the values".')
+            warnings.append(text)
         else:
             warnings.append(f'{_plural(right_duplicate_keys, "value")} {_v(right_duplicate_keys, "appears", "appear")} '
                             f'more than once in "{name}", so {_plural(n_new, "extra row")} '
-                            f'{_v(n_new, "was", "were")} added, one per extra match.')
+                            f'{_v(n_new, "was", "were")} added, one per extra match ({len(df):,} → {len(out):,} rows).')
     if renamed:
         warnings.append("Some columns already existed in your data, so the new ones were renamed: "
                         + ", ".join(f'"{r["before"]}" → "{r["after"]}"' for r in renamed[:5]) + ".")
@@ -362,14 +440,20 @@ def _join(df: pd.DataFrame, attached, op: CombineFiles, ctx: CombineContext, OpR
         "source_file": name,
         "matched_rows": matched_left,
         "unmatched_rows": unmatched_left,
+        "no_match_rows": no_match,
+        "rows_before": len(df),
+        "rows_after": len(out),
+        "match_column": op.match_column,
+        "duplicate_examples": dup_examples,
+        "conflicting_duplicate_keys": conflicting,
         "rows_added": rows_added,
         "added_index": added_index[:SAMPLE_ROWS],
-        "added_columns": new_cols,
+        "added_columns": new_cols + status_cols,
         "renamed_columns": renamed,
         "duplicate_keys_in_other": right_duplicate_keys,
         "blank_keys": left_blank,
         "retyped_columns": retyped,
-        "touched": new_cols,
+        "touched": new_cols + status_cols,
         "removed_index": removed_index,
     }
     return OpResult(out, summary, rows_removed=removed_rows, cells_changed=filled, warnings=warnings,

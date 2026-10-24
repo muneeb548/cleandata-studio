@@ -88,7 +88,9 @@ export type FormState = {
   cfKeys: JoinKey[];
   cfHow: JoinHow;
   cfLoose: boolean;
-  cfDuplicates: "first" | "all";
+  cfDuplicates: "first" | "all" | "stop";
+  cfMatchOn: boolean;
+  cfMatchName: string;
   /** columns to bring from the other file (empty = all except the match columns) */
   cfColumns: string[];
 };
@@ -171,6 +173,8 @@ export const DEFAULT_FORM: FormState = {
   cfHow: "left",
   cfLoose: true,
   cfDuplicates: "first",
+  cfMatchOn: false,
+  cfMatchName: "match_status",
   cfColumns: [],
 };
 
@@ -441,6 +445,7 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
       if (!keys.length || keys.some((k) => !k.left || !k.right)) return { error: "Choose the matching column in both files." };
       if (new Set(keys.map((k) => k.left)).size !== keys.length || new Set(keys.map((k) => k.right)).size !== keys.length)
         return { error: "Use each column only once to match rows." };
+      if (f.cfMatchOn && !f.cfMatchName.trim()) return { error: "Enter a name for the column that shows whether each row matched." };
       return {
         operation: {
           type: "combine_files",
@@ -450,6 +455,7 @@ export function buildOperation(choice: CleanChoice, f: FormState): BuildResult {
           how: f.cfHow,
           loose_keys: f.cfLoose,
           duplicates: f.cfDuplicates,
+          match_column: f.cfMatchOn ? f.cfMatchName.trim() : null,
           columns: f.cfColumns.filter((c) => !keys.some((k) => k.right === c)),
         },
       };

@@ -274,11 +274,28 @@ export function CombineFilesForm({ form, set, cols }: Props) {
 
               <fieldset>
                 <legend className="mb-2 text-small font-medium text-slate-700">When a value appears more than once in {selected.name}</legend>
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2 lg:grid-cols-3">
                   <RadioCard name="cf-dup" value="first" checked={form.cfDuplicates === "first"} onChange={() => set({ cfDuplicates: "first" })} label="Use the first match" description="Like VLOOKUP: the number of rows stays the same." />
                   <RadioCard name="cf-dup" value="all" checked={form.cfDuplicates === "all"} onChange={() => set({ cfDuplicates: "all" })} label="Use every match" description="My row is repeated once per match, e.g. one row per order." />
+                  <RadioCard name="cf-dup" value="stop" checked={form.cfDuplicates === "stop"} onChange={() => set({ cfDuplicates: "stop" })} label="Stop and show me the values" description="For a lookup list where each value must appear once, e.g. one tier per customer." />
                 </div>
               </fieldset>
+
+              <div className="space-y-3">
+                <Checkbox
+                  id="cf-match"
+                  checked={form.cfMatchOn}
+                  onChange={(e) => set({ cfMatchOn: e.target.checked })}
+                  label="Add a column that shows whether each row matched"
+                  description="Each row gets “matched”, “no match” or “empty key”, so you can filter or flag the rows without a match."
+                />
+                {form.cfMatchOn && (
+                  <div className="max-w-xs space-y-1.5">
+                    <Label htmlFor="cf-match-name">Column name</Label>
+                    <Input id="cf-match-name" value={form.cfMatchName} maxLength={200} onChange={(e) => set({ cfMatchName: e.target.value })} />
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </>

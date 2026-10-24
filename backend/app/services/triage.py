@@ -60,6 +60,8 @@ def _history_facts(session) -> dict:
         elif h.type == "near_duplicates" and p.get("action") == "flag":
             own_columns.add(p.get("column_name", "duplicate_group"))
         elif h.type == "combine_files" and p.get("mode") == "join":
+            if p.get("match_column"):
+                own_columns.add(p["match_column"])
             attached = session.files.get(p.get("file_id"))
             if attached is not None:
                 keys = {k["right"] for k in p.get("keys", [])}
