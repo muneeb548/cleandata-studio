@@ -280,8 +280,16 @@ describe("combine files", () => {
       how: "inner",
       loose_keys: true,
       duplicates: "first",
+      match_column: null,
       columns: ["city"],
     });
+  });
+
+  it("can stop on repeated values and add a match status column", () => {
+    const f = { ...DEFAULT_FORM, cfFileId: "abc", cfMode: "join" as const, cfKeys: [{ left: "id", right: "id" }] };
+    const op = buildOperation("combine_files", { ...f, cfDuplicates: "stop" as const, cfMatchOn: true, cfMatchName: " match_status " }).operation;
+    expect(op).toMatchObject({ duplicates: "stop", match_column: "match_status" });
+    expect(buildOperation("combine_files", { ...f, cfMatchOn: true, cfMatchName: " " }).error).toMatch(/name/);
   });
 
   it("asks for both sides of every match", () => {
